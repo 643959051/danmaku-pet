@@ -14,3 +14,7 @@ pytest-cache-files-*/
 build/
 dist/
 *.pyc
+
+# 本机生成的报告（含绝对路径与用户名），不作为源码分发
+docs/*.json
+docs/INSTALL_LOCATIONS.md

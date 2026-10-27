@@ -1,11 +1,19 @@
 # 弹幕小人 MVP
 
-本地运行的「弹幕 / 输入驱动虚拟小人」最小闭环，严格分成三层：
+一个本地运行的「弹幕 / 输入驱动虚拟小人」最小闭环：手动输入或模拟弹幕进来，DeepSeek 产出结构化动作，桌面小人边说边演。
 
 ```text
 输入归一化 Event  ->  LLM 结构化决策 ActionPlan  ->  小人执行层 perform()
 manual / simulator     DeepSeek JSON / 礼物剧本         dsh-dafeiyu + EdgeTTS
 ```
+
+- Python 3.11 + FastAPI + WebSocket，网页管理端即开即用
+- DeepSeek 严格 JSON 决策，枚举校验 + 兜底；没有 Key 时明确降级为本地模拟
+- 原生桌面小人（dsh-dafeiyu）+ EdgeTTS + pygame，动作时长与语音对齐
+- 支持打包成便携版 exe（PyInstaller onedir，约 201 MB）
+- 73 项 pytest 测试
+
+> MIT 许可。第三方依赖与角色素材的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 第一版不接真实抖音，用网页输入框和模拟弹幕循环代替。真实 Webcast 消息的适配边界已经单独放在 `inputs/douyin_webcast.py`，未来只改这一层。
 
@@ -38,17 +46,17 @@ manual / simulator     DeepSeek JSON / 礼物剧本         dsh-dafeiyu + EdgeTT
 
 ## 2. 快速开始
 
-### 2.1 本项目已经创建好的环境
+### 2.1 环境约定
 
-当前机器的实际环境：
+项目使用**工作区内的独立 conda 前缀**，不依赖全局 Python，也不需要 `conda activate`；所有命令都通过项目解释器 `.\.conda\env\python.exe` 执行。
 
 ```text
-Python:  D:\working\dsh-chat\douyin-live\.conda\env\python.exe
-版本:    3.11.18
-conda:   D:\working\conda3\Scripts\conda.exe
+conda 前缀:  ./.conda/env
+Python:      3.11
+解释器:      .\.conda\env\python.exe
 ```
 
-不需要 `conda activate`。所有命令都通过项目解释器绝对路径执行。
+依赖、缓存、临时文件和下载素材全部落在工作区内：`.conda/`、`.cache/`（pip/npm/conda 缓存）、`vendor/`（桌面小人素材）、`temp/`、`assets/`。唯一的外部前提是本机已安装 conda 与 Node（`npm` 仅用于 `npm pack` 下载素材，不装全局包）。
 
 ### 2.2 配 DeepSeek Key
 
@@ -248,13 +256,15 @@ douyin-live/
 │  ├─ verify_install.py        安装位置验证
 │  ├─ ws_smoke.py              WebSocket 冒烟测试
 │  └─ capture_pet_window.ps1   只截取 dafeiyu 窗口的验证脚本
-├─ vendor/dafeiyu/package/     dsh-dafeiyu@0.1.21 本地包
-├─ assets/tts_cache/           EdgeTTS 音频缓存
-├─ data/persona.json           可编辑的角色语气配置
-├─ temp/                       日志、布局、临时文件、测试产物
-├─ docs/                       安装报告、截图
-├─ .conda/env/                 项目专属 conda 前缀环境
-├─ .cache/                     pip / npm / conda / LOCALAPPDATA 缓存
+├─ vendor/dafeiyu/package/     dsh-dafeiyu@0.1.21 本地包（install.ps1 下载，不入库）
+├─ assets/tts_cache/           EdgeTTS 音频缓存（不入库）
+├─ data/persona.json           可编辑的角色语气配置（不入库）
+├─ temp/                       日志、布局、临时文件、测试产物（不入库）
+├─ docs/screenshots/           截图
+├─ .conda/env/                 项目专属 conda 前缀环境（不入库）
+├─ .cache/                     pip / npm / conda / LOCALAPPDATA 缓存（不入库）
+├─ LICENSE                     MIT
+├─ THIRD_PARTY_NOTICES.md      依赖与素材许可声明
 ├─ .env.example
 ├─ requirements.txt
 └─ pytest.ini
@@ -508,14 +518,13 @@ dafeiyu 本身没有动作级 API，所以本项目给它的本地 helper 加了
 ## 9. 测试
 
 ```powershell
-$env:TEMP='D:\working\dsh-chat\douyin-live\temp\pytest-temp'
 .\.conda\env\python.exe -m pytest -q
 ```
 
 当前结果：
 
 ```text
-55 passed
+73 passed
 ```
 
 覆盖：
@@ -535,38 +544,30 @@ $env:TEMP='D:\working\dsh-chat\douyin-live\temp\pytest-temp'
 - 角色语气配置、提示词注入与 JSON 契约保持
 - 管理端 `.env` 写入、主动回复上一条/指定弹幕
 - Douyin Webcast 字段映射
-
-自动回复实测：[docs/auto-reply-smoke.json](docs/auto-reply-smoke.json)。
+- 打开浏览器：成功/失败/进程起来但页面未请求、启动器降级
+- 打包路径锚点：只读资源与可写目录分离
 
 ---
 
-## 10. 安装位置清单
+## 10. 运行位置
 
-详细报告见 [`docs/install-report.json`](docs/install-report.json) 和 [`docs/INSTALL_LOCATIONS.md`](docs/INSTALL_LOCATIONS.md)。
-
-核心结论：
+所有依赖与产物都在工作区内，`scripts/verify_install.py` 会逐项检查：
 
 ```text
-Python            D:\working\dsh-chat\douyin-live\.conda\env\python.exe
-Python 版本       3.11.18
-conda 前缀        D:\working\dsh-chat\douyin-live\.conda\env
-site-packages     D:\working\dsh-chat\douyin-live\.conda\env\Lib\site-packages
-dafeiyu           D:\working\dsh-chat\douyin-live\vendor\dafeiyu\package
-TTS 缓存          D:\working\dsh-chat\douyin-live\assets\tts_cache
-pip 缓存          D:\working\dsh-chat\douyin-live\.cache\pip
-npm 缓存          D:\working\dsh-chat\douyin-live\.cache\npm
-conda 包缓存      D:\working\dsh-chat\douyin-live\.cache\conda-pkgs
-临时文件          D:\working\dsh-chat\douyin-live\temp
-日志              D:\working\dsh-chat\douyin-live\temp\logs\app.log
+Python              <工作区>\.conda\env\python.exe
+conda 前缀           <工作区>\.conda\env
+site-packages       <工作区>\.conda\env\Lib\site-packages
+dafeiyu 素材         <工作区>\vendor\dafeiyu\package
+TTS 缓存            <工作区>\assets\tts_cache
+pip / npm / conda 缓存 <工作区>\.cache
+临时文件 / 日志       <工作区>\temp\（日志在 temp\logs\app.log）
+便携版产物           <工作区>\dist\DanmakuPet\
 ```
 
-- 没有创建 `.venv`
-- 没有使用全局 Python
-- 没有 `pip install --user`
-- 没有 `npm install -g`
-- 没有 `node_modules` 依赖（只用了系统 Node 的 `npm pack` 下载，缓存到 `.cache/npm`）
-- `verify_install.py` 检查：49 个 Python distribution 全部位于项目 conda 前缀，`pip check` 通过
-- 权限修复产生的临时 ACL 备份已移入 `temp/acl-recovery`，工作区外的临时恢复目录已删除
+- 没有创建 `.venv`，没有使用全局 Python，没有 `pip install --user`，没有 `npm install -g`
+- `npm pack` 只用于把 `dsh-dafeiyu` 下载到 `vendor/`，缓存放在 `.cache/npm`
+- `verify_install.py` 会校验全部 Python distribution 都位于项目 conda 前缀，并运行 `pip check`
+
 
 ---
 
@@ -593,4 +594,25 @@ conda 包缓存      D:\working\dsh-chat\douyin-live\.cache\conda-pkgs
 - 执行器：[`danmaku_pet/execution/backend.py`](danmaku_pet/execution/backend.py)
 - EdgeTTS：[`danmaku_pet/execution/tts.py`](danmaku_pet/execution/tts.py)
 - Web 控制台：[`danmaku_pet/web/index.html`](danmaku_pet/web/index.html)
+
+---
+
+## 13. 许可证
+
+本项目代码以 **MIT** 许可发布，见 [LICENSE](LICENSE)。
+
+运行时依赖与桌面小人素材的许可情况（含 PySide6 / edge-tts / pygame 的 LGPL 要求）见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+仓库里**不含**以下内容，克隆后按「2.4 从零安装」重建即可：
+
+| 内容 | 原因 | 如何获得 |
+| --- | --- | --- |
+| `vendor/dafeiyu/`（约 231 MB） | 上游 npm 包与角色素材，避免重复分发 | `scripts/install.ps1` / `scripts/fetch_visual.ps1` |
+| `.env` | 含个人 API Key | 从 `.env.example` 复制 |
+| `.conda/`（约 877 MB） | 本机环境 | `conda create -p ./.conda/env python=3.11 -y` + `install.ps1` |
+| `dist/`（约 201 MB） | 打包产物 | `scripts/build_exe.ps1` |
+| `temp/`、`assets/tts_cache/` | 运行产物与日志 | 首次运行自动生成 |
+
+如果你要二次分发便携版 exe，请同时遵守 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 里对 LGPL 组件与角色素材的说明。
+
 
