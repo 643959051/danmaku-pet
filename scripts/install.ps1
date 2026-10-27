@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Prefix = Join-Path $Root ".conda\env"
 $Python = Join-Path $Prefix "python.exe"

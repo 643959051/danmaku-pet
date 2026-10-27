@@ -207,6 +207,43 @@ dist/DanmakuPet/
 
 > 打包需要写 `dist/`、`build/` 和项目的 `.cache/pip`，都在工作区内，不会装到全局 Python。
 
+### 2.6 一键发布到 Gitee 发行版
+
+先说结论：**Gitee 的云端流水线（Gitee Go）打不出这个项目的 exe** —— 它的构建机是 Linux 容器（CentOS / Ubuntu），没有 Windows 运行环境，而本项目依赖 PyInstaller + PySide6 + PowerShell 脚本。发布放在本机一条命令里完成：
+
+```powershell
+$env:GITEE_TOKEN = "你的 Gitee 私人令牌"   # Gitee → 设置 → 私人令牌，勾选 projects
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0
+```
+
+它会依次完成：打包便携版 → 生成发行包 → 推送 tag → 创建发行版 → 上传附件。
+
+**为什么是两个包**：Gitee 发行版单个附件上限 **100 MB**，完整便携包压缩后约 118 MB。
+
+| 文件 | 压缩后 | 内容 |
+| --- | --- | --- |
+| `DanmakuPet-0.1.0-win64.zip` | 62.8 MB | exe + 运行时 + 网页 + 桌宠代码 |
+| `DanmakuPet-0.1.0-win64-assets.zip` | 55.4 MB | 桌宠素材 `_internal\vendor\...\assets` |
+
+两个包都解压到**同一个目录**即合并（实测解压后 202.7 MB，`--check` 通过）。
+
+常用参数：
+
+```powershell
+# 只打包、不上传，之后在网页上手动拖拽
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -NoUpload
+
+# 复用已有的 dist\DanmakuPet，不重新打包
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -SkipBuild -Tag v0.1.0
+
+# 自定义发行说明 / 标记预览版
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0 -NotesFile .\release-notes.md -Prerelease
+```
+
+- 令牌只在本机进程内使用，脚本不会把它写进仓库或 `.git/config`；用完可在 Gitee 撤销。
+- 附件上传走 Gitee Open API（`POST /repos/{owner}/{repo}/releases/{id}/attach_files`），用的是 Windows 自带的 `curl.exe`。
+- Gitee Go 仍然适合跑单元测试（Linux + pytest），但它不产 exe；想完全云端构建 Windows 包，需要 GitHub Actions 的 `windows-latest` 再回调 Gitee API 上传。
+
 ---
 
 ## 3. 项目结构
@@ -250,6 +287,7 @@ douyin-live/
 │  ├─ install.ps1              从零安装
 │  ├─ run.ps1                  本地启动
 │  ├─ build_exe.ps1            打包成便携版 exe
+│  ├─ release.ps1              打包 + 创建 Gitee 发行版 + 上传附件
 │  ├─ fetch_visual.ps1         本地下载 dafeiyu 包
 │  ├─ apply_dafeiyu_spin_patch.py 给本地 helper 加 spin effect
 │  ├─ pip_workspace.py         工作区兼容的 pip 临时目录启动器

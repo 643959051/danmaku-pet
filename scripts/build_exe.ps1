@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   把「弹幕小人」打包成便携版 exe（onedir）。
 
