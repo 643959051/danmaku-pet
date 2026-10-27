@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>弹幕小人 · MVP</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">鱼</div>
+      <div>
+        <h1>弹幕小人 <span>MVP</span></h1>
+        <p>INPUT → STRUCTURED DECISION → PERFORMANCE</p>
+      </div>
+    </div>
+    <div class="status-strip" aria-label="系统状态">
+      <div class="status-chip" id="chipLlm"><i></i><span>LLM</span><b>连接中</b></div>
+      <div class="status-chip" id="chipTts"><i></i><span>TTS</span><b>EdgeTTS</b></div>
+      <div class="status-chip" id="chipPet"><i></i><span>桌面小人</span><b>启动中</b></div>
+      <div class="status-chip" id="chipQueue"><i></i><span>队列</span><b>0</b></div>
+      <button class="icon-btn" id="settingsBtn" type="button" title="配置 DeepSeek">
+        <span aria-hidden="true">⚙</span> 设置
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel stage-panel">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">LIVE STAGE</div>
+          <h2>小鱼的工作台</h2>
+        </div>
+        <div class="stage-live"><span></span> 本地直播中</div>
+      </div>
+
+      <div class="stage" id="stage">
+        <div class="stage-grid" aria-hidden="true"></div>
+        <div class="bubble" id="speechBubble">
+          <div class="bubble-user" id="bubbleUser">小鱼</div>
+          <div class="bubble-text" id="bubbleText">输入一句话，开始第一轮对话吧。</div>
+          <div class="bubble-tail"></div>
+        </div>
+
+        <canvas id="petCanvas" width="560" height="430" aria-label="大肥鱼角色预览"></canvas>
+
+        <div class="stage-hint" id="stageHint">
+          <strong>第一步</strong>
+          <span>在右侧输入一句话，DeepSeek 返回 JSON，小人说话并做动作。</span>
+        </div>
+
+        <div class="speaking-pill" id="speakingPill">
+          <span class="wave"><i></i><i></i><i></i><i></i></span>
+          <em id="speakingLabel">正在说话</em>
+        </div>
+      </div>
+
+      <div class="stage-meta">
+        <div class="meta-badges">
+          <span class="badge emotion" id="badgeEmotion">情绪 · —</span>
+          <span class="badge motion" id="badgeMotion">动作 · —</span>
+          <span class="badge priority" id="badgePriority">优先级 · —</span>
+          <span class="badge source" id="badgeSource">决策 · —</span>
+        </div>
+        <div class="metrics">
+          <div><small>完成</small><strong id="metricDone">0</strong></div>
+          <div><small>平均决策</small><strong id="metricLatency">—</strong></div>
+          <div><small>平均语音</small><strong id="metricSpeech">—</strong></div>
+          <div><small>丢弃</small><strong id="metricDropped">0</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel controls">
+        <div class="panel-head compact">
+          <div>
+            <div class="eyebrow">MANUAL INPUT</div>
+            <h2>说给小鱼听</h2>
+          </div>
+          <span class="source-tag">manual</span>
+        </div>
+
+        <div class="auto-reply-row">
+          <label class="switch" title="自动回复弹幕">
+            <input type="checkbox" id="autoReplyToggle">
+            <span class="switch-track"><span></span></span>
+          </label>
+          <div class="auto-reply-copy">
+            <strong>自动回复弹幕 <em id="autoReplyState">关闭</em></strong>
+            <small id="autoReplyHint">关闭：新弹幕进入待回复列表，不自动说话</small>
+          </div>
+        </div>
+
+        <form id="manualForm" autocomplete="off">
+          <label class="field small">
+            <span>观众昵称</span>
+            <input id="userInput" value="观众" maxlength="40" placeholder="观众">
+          </label>
+          <label class="field">
+            <span>输入弹幕</span>
+            <textarea id="textInput" maxlength="500" rows="3" placeholder="比如：小鱼，转个圈看看！"></textarea>
+          </label>
+          <div class="form-actions">
+            <button class="btn primary" type="submit" id="sendBtn">
+              发送给小鱼 <kbd>Ctrl ↵</kbd>
+            </button>
+            <button class="btn ghost" type="button" id="replyLastBtn">回复上一条</button>
+            <button class="btn ghost" type="button" id="interruptBtn">打断</button>
+          </div>
+        </form>
+
+        <div class="gift-block">
+          <div class="block-label"><span>礼物快速测试</span><em>high priority · 打断</em></div>
+          <div class="gift-grid" id="giftGrid">
+            <button type="button" data-gift="小心心" data-count="1">💗 <span>小心心</span></button>
+            <button type="button" data-gift="玫瑰" data-count="3">🌹 <span>玫瑰 ×3</span></button>
+            <button type="button" data-gift="跑车" data-count="1">🏎️ <span>跑车</span></button>
+            <button type="button" data-gift="火箭" data-count="1">🚀 <span>火箭</span></button>
+            <button type="button" data-gift="嘉年华" data-count="1">🎡 <span>嘉年华</span></button>
+            <button type="button" data-gift="墨镜" data-count="1">😎 <span>墨镜</span></button>
+          </div>
+        </div>
+
+        <div class="sim-block">
+          <div class="block-label">
+            <span>模拟弹幕循环</span>
+            <em id="simState">已停止</em>
+          </div>
+          <div class="sim-controls">
+            <label class="field tiny">
+              <span>间隔（秒）</span>
+              <input id="simInterval" type="number" min="0.8" max="60" step="0.2" value="4">
+            </label>
+            <label class="field tiny">
+              <span>场景</span>
+              <select id="simScenario">
+                <option value="mixed">混合（每 4 条一个礼物）</option>
+                <option value="chat">纯弹幕</option>
+                <option value="gift">礼物压力</option>
+              </select>
+            </label>
+            <button class="btn primary slim" type="button" id="simToggle">开始循环</button>
+          </div>
+          <p class="sim-note">旧消息超过 3 秒会自动丢弃；礼物会清空普通待处理队列并打断当前表演。</p>
+        </div>
+
+        <div class="pending-block">
+          <div class="block-label">
+            <span>待回复弹幕</span>
+            <em id="pendingCount">0 条</em>
+          </div>
+          <div class="pending-list" id="pendingList">
+            <div class="pending-empty">暂无。关闭自动回复后，模拟弹幕会出现在这里。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel inspector">
+        <div class="panel-head compact">
+          <div>
+            <div class="eyebrow">DECISION JSON</div>
+            <h2>结构化决策</h2>
+          </div>
+          <span class="source-tag" id="decisionSource">waiting</span>
+        </div>
+        <pre id="planJson" class="json-view">{
+  "reply": "等待第一条输入…",
+  "emotion": "neutral",
+  "motion": "idle",
+  "priority": "normal",
+  "interrupt": false
+}</pre>
+        <div class="json-foot">
+          <span id="warningLine">严格 JSON · 非法动作自动回退 idle / nod</span>
+          <button class="link" type="button" id="copyJson">复制</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <section class="panel log-panel">
+    <div class="panel-head compact">
+      <div>
+        <div class="eyebrow">EVENT STREAM</div>
+        <h2>事件时间线</h2>
+      </div>
+      <div class="log-tools">
+        <span id="logCount">0 条</span>
+        <button class="link" type="button" id="clearContext">清空上下文</button>
+      </div>
+    </div>
+    <div class="log-list" id="logList">
+      <div class="empty-log">还没有事件。发送一条弹幕，或者启动模拟循环。</div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span>dsh-dafeiyu 原生视觉后端 · EdgeTTS · Python 3.11</span>
+    <span id="clock"></span>
+  </footer>
+
+  <div class="settings-backdrop" id="settingsPanel" aria-hidden="true">
+    <section class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="panel-head compact">
+        <div>
+          <div class="eyebrow">ADMIN SETTINGS</div>
+          <h2 id="settingsTitle">管理端 · 设置</h2>
+        </div>
+        <button class="close-btn" type="button" id="settingsClose" aria-label="关闭">×</button>
+      </div>
+
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab active" type="button" data-settings-tab="llm">LLM 连接</button>
+        <button class="settings-tab" type="button" data-settings-tab="persona">角色语气</button>
+      </div>
+
+      <div class="settings-tab-panel" id="settingsTabLlm">
+        <form id="settingsForm" autocomplete="off">
+          <label class="field">
+            <span>决策模式</span>
+            <select id="settingsMode">
+              <option value="auto">auto · 有 Key 用 DeepSeek，否则本地模拟</option>
+              <option value="deepseek">deepseek · 强制真实 API</option>
+              <option value="mock">mock · 强制本地模拟</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>DeepSeek API Key</span>
+            <input id="settingsKey" type="password" autocomplete="new-password" spellcheck="false"
+                   placeholder="留空表示保持当前 Key 不变">
+          </label>
+          <label class="check-field">
+            <input id="settingsClearKey" type="checkbox">
+            <span>清除已保存的 Key</span>
+          </label>
+
+          <div class="settings-grid">
+            <label class="field">
+              <span>模型</span>
+              <input id="settingsModel" type="text" placeholder="deepseek-chat">
+            </label>
+            <label class="field">
+              <span>Base URL</span>
+              <input id="settingsBaseUrl" type="text" placeholder="https://api.deepseek.com">
+            </label>
+          </div>
+
+          <p class="settings-note">
+            Key 只写入工作区 <code>.env</code>，不会通过 API 回显，也不会写入日志。
+            保存后会热切换决策引擎；如果当前正在等 DeepSeek 返回，会等这次请求结束后生效。
+          </p>
+          <div class="settings-actions">
+            <button class="btn primary" type="submit" id="settingsSave">保存并应用</button>
+            <button class="btn ghost" type="button" id="settingsCancel">取消</button>
+          </div>
+          <div class="settings-feedback" id="settingsFeedback"></div>
+        </form>
+      </div>
+
+      <div class="settings-tab-panel hidden" id="settingsTabPersona">
+        <form id="personaForm" autocomplete="off">
+          <label class="field">
+            <span>角色名</span>
+            <input id="personaName" type="text" maxlength="20" placeholder="小鱼">
+          </label>
+
+          <label class="field">
+            <span>身份设定</span>
+            <textarea id="personaIdentity" rows="2" maxlength="200"
+                      placeholder="直播间里的虚拟陪伴小人，会接梗、会撒娇，也会认真听观众说话"></textarea>
+          </label>
+
+          <div class="settings-grid">
+            <label class="field">
+              <span>语气风格</span>
+              <input id="personaTone" type="text" maxlength="120"
+                     placeholder="温柔、活泼、自然，偶尔撒娇">
+            </label>
+            <label class="field">
+              <span>口头禅 / 说话习惯</span>
+              <input id="personaCatchphrase" type="text" maxlength="80"
+                     placeholder="例如：好啦好啦 / 真的假的">
+            </label>
+          </div>
+
+          <div class="settings-grid">
+            <label class="field">
+              <span>回复长度</span>
+              <select id="personaLength">
+                <option value="short">短句 · 一到两句</option>
+                <option value="medium">适中 · 两三句</option>
+                <option value="long">稍长 · 三到四句</option>
+              </select>
+            </label>
+            <label class="check-field persona-check">
+              <input id="personaEmoji" type="checkbox">
+              <span>允许适量 emoji / 颜文字</span>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>补充规则</span>
+            <textarea id="personaRules" rows="3" maxlength="600"
+                      placeholder="例如：不要用网络烂梗；被夸时先害羞再嘴硬；不要主动提 AI。"></textarea>
+          </label>
+
+          <p class="settings-note">
+            角色设定只影响回复内容和语气，不会改变固定 JSON 字段与 motion/emotion 枚举。
+            角色配置保存在工作区 <code>data/persona.json</code>，不会回显到日志。
+          </p>
+          <div class="settings-actions">
+            <button class="btn primary" type="submit" id="personaSave">保存角色设置</button>
+            <button class="btn ghost" type="button" id="personaCancel">取消</button>
+          </div>
+          <div class="settings-feedback" id="personaFeedback"></div>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

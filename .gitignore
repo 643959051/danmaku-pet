@@ -1,0 +1,16 @@
+.conda/
+.cache/
+.env
+.env.tmp
+data/persona.json
+temp/
+assets/tts_cache/
+vendor/*.tgz
+vendor/dafeiyu/
+vendor/bigfish/
+__pycache__/
+.pytest_cache/
+pytest-cache-files-*/
+build/
+dist/
+*.pyc

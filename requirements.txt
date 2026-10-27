@@ -1,0 +1,14 @@
+# Runtime dependencies for the local MVP.
+# Installed only into ./.conda/env by scripts/install.ps1.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+pydantic>=2.7,<3
+python-dotenv>=1.0,<2
+edge-tts>=7.0,<8
+pygame>=2.6,<3
+PySide6>=6.7,<7
+
+# Test dependencies
+pytest>=8,<9
+pytest-asyncio>=0.24,<2

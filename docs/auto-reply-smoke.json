@@ -1,0 +1,46 @@
+{
+  "initial_auto_reply": false,
+  "pending_before_manual_reply": 3,
+  "manual_reply_event": {
+    "source": "manual",
+    "user": "橘子汽水",
+    "text": "你转一圈我看看",
+    "gift_name": null,
+    "gift_count": 0,
+    "timestamp": 1793108874.3866751,
+    "event_id": "61214d418a36",
+    "is_gift": false
+  },
+  "manual_completed": 1,
+  "auto_reply_enabled": true,
+  "read_aloud_entries": [
+    {
+      "event": {
+        "source": "danmaku_sim",
+        "user": "不吃香菜",
+        "text": "来个害羞的表情",
+        "gift_name": null,
+        "gift_count": 0,
+        "timestamp": 1793108878.0314128,
+        "event_id": "cf9cb216dd2c",
+        "is_gift": false
+      },
+      "plan": {
+        "reply": "别、别这么夸我啦……",
+        "emotion": "shy",
+        "motion": "shy",
+        "priority": "normal",
+        "interrupt": false
+      },
+      "decision_source": "mock",
+      "latency_ms": 50,
+      "audio_ms": 5107,
+      "read_aloud": true,
+      "status": "completed",
+      "error": null,
+      "started_at": 1793108878.0329225,
+      "ended_at": 1793108886.6112022
+    }
+  ],
+  "final_auto_reply": false
+}

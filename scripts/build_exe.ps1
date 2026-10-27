@@ -1,0 +1,84 @@
+<#
+.SYNOPSIS
+  把「弹幕小人」打包成便携版 exe（onedir）。
+
+.EXAMPLE
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean
+
+.EXAMPLE
+  # 重新打包并压缩成便于分发的 zip
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean -Zip
+#>
+param(
+  [switch]$Clean,
+  [switch]$Zip
+)
+
+$ErrorActionPreference = "Stop"
+$Root = Split-Path -Parent $PSScriptRoot
+$Python = Join-Path $Root ".conda\env\python.exe"
+$Spec = Join-Path $Root "packaging\DanmakuPet.spec"
+$Dist = Join-Path $Root "dist"
+$Build = Join-Path $Root "build"
+$Output = Join-Path $Dist "DanmakuPet"
+
+if (-not (Test-Path $Python)) {
+  throw "找不到项目 Python：$Python。请先运行 scripts\install.ps1。"
+}
+if (-not (Test-Path $Spec)) {
+  throw "找不到打包脚本：$Spec"
+}
+
+# 所有缓存/临时文件都留在工作区内，和 run.ps1 保持一致。
+$env:TEMP = Join-Path $Root "temp\build-temp"
+$env:TMP = $env:TEMP
+$env:PIP_CACHE_DIR = Join-Path $Root ".cache\pip"
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+New-Item -ItemType Directory -Force $env:TEMP, $env:PIP_CACHE_DIR | Out-Null
+
+# 1. 构建工具（只装进项目环境，不碰全局 Python）
+& $Python -c "import PyInstaller" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "安装 PyInstaller 到项目环境 …"
+  & $Python -m pip install --timeout 30 "pyinstaller>=6,<7"
+  if ($LASTEXITCODE -ne 0) { throw "PyInstaller 安装失败" }
+}
+
+# 2. 清理旧产物
+if ($Clean) {
+  foreach ($path in @($Build, $Dist)) {
+    if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+  }
+}
+
+# 3. 打包
+Write-Host "开始打包（首次会慢一些，PySide6 体积大）…"
+& $Python -m PyInstaller $Spec --noconfirm --clean --distpath $Dist --workpath $Build
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
+
+# 4. 便携目录里放一份配置样例，方便第一次运行前填写 Key
+$Example = Join-Path $Root ".env.example"
+if (Test-Path $Example) {
+  Copy-Item $Example (Join-Path $Output ".env.example") -Force
+}
+
+$Exe = Join-Path $Output "DanmakuPet.exe"
+if (-not (Test-Path $Exe)) { throw "打包结束但没有找到 $Exe" }
+
+$SizeMb = [math]::Round(((Get-ChildItem $Output -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+Write-Host ""
+Write-Host "打包完成：$Exe"
+Write-Host "目录大小：$SizeMb MB"
+Write-Host "双击 exe 即可启动；首次会生成 .env / data / temp / assets 等运行目录。"
+
+if ($Zip) {
+  $Archive = Join-Path $Dist "DanmakuPet-win64.zip"
+  if (Test-Path $Archive) { Remove-Item $Archive -Force }
+  Compress-Archive -Path $Output -DestinationPath $Archive -CompressionLevel Optimal
+  $ZipMb = [math]::Round(((Get-Item $Archive).Length / 1MB), 1)
+  Write-Host "已压缩：$Archive（$ZipMb MB）"
+}
+
+exit 0
+
