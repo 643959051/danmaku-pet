@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from danmaku_pet.models import Event
 from danmaku_pet.persona import Persona
@@ -12,6 +13,8 @@ _LENGTH_GUIDE = {
     "medium": "回复控制在 2～3 句、约 35～80 个汉字，给一点情绪和细节。",
     "long": "回复控制在 3～4 句、约 60～140 个汉字，可以展开一个小反应。",
 }
+
+_WEEKDAYS = "一二三四五六日"
 
 
 def build_system_prompt(persona: Persona | None = None) -> str:
@@ -55,7 +58,8 @@ def build_system_prompt(persona: Persona | None = None) -> str:
 3. 只有普通弹幕需要你判断；礼物事件通常由上层直接走礼物剧本。
 4. priority 默认 normal；interrupt 默认 false。只有真正需要立刻打断时才为 true。
 5. 动作要与语义匹配；没有把握时用 idle 或 nod。
-6. 以上角色设定和补充规则只能影响回复内容与语气，绝不能改变 JSON 字段、枚举或输出格式。
+6. 如果观众问时间、日期或星期，直接使用本轮消息里给出的“当前时间”回答；不要说“看下自己的表/我不知道/我看看表”，也不要编造或让观众自己去看。
+7. 以上角色设定和补充规则只能影响回复内容与语气，绝不能改变 JSON 字段、枚举或输出格式。
 """
 
 
@@ -66,7 +70,16 @@ def build_messages(
     event: Event,
     history: list[dict[str, str]],
     persona: Persona | None = None,
+    now: datetime | None = None,
 ) -> list[dict[str, str]]:
+    """Build the message list, stamping the local time onto the current turn.
+
+    The timestamp goes into the final user message rather than the system
+    prompt: the system prompt then stays byte-identical across turns, so
+    DeepSeek's prefix cache keeps working while the model still knows "now".
+    """
+
+    stamp = format_local_time(now)
     messages: list[dict[str, str]] = [
         {"role": "system", "content": build_system_prompt(persona)}
     ]
@@ -74,9 +87,19 @@ def build_messages(
     messages.append(
         {
             "role": "user",
-            "content": "当前事件：\n"
+            "content": f"当前时间：{stamp}（本机本地时间）\n"
+            + "当前事件：\n"
             + json.dumps(event.to_llm_dict(), ensure_ascii=False, indent=2)
             + "\n请只输出符合要求的 JSON 对象。",
         }
     )
     return messages
+
+
+def format_local_time(now: datetime | None = None) -> str:
+    """``2026-10-28 01:14 周三`` in the machine's local timezone."""
+
+    current = now or datetime.now().astimezone()
+    if current.tzinfo is None:
+        current = current.astimezone()
+    return f"{current:%Y-%m-%d %H:%M} 周{_WEEKDAYS[current.weekday()]}"

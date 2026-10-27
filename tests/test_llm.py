@@ -105,3 +105,16 @@ async def test_mock_engine_is_deterministic() -> None:
     result = await MockDecisionEngine().decide(make_event("转个圈"), ConversationMemory(10))
     assert result.plan.motion == "spin"
     assert result.source == "mock"
+
+
+@pytest.mark.asyncio
+async def test_mock_engine_answers_time_questions() -> None:
+    """本地模拟也要报时间，而不是套用“收到弹幕”的兜底模板。"""
+
+    result = await MockDecisionEngine().decide(
+        make_event("小鱼，现在几点了"), ConversationMemory(10)
+    )
+    assert result.plan.reply.startswith("现在是 ")
+    assert "周" in result.plan.reply
+    assert result.plan.motion == "nod"
+    assert result.source == "mock"

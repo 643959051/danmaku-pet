@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Any, Protocol
 
 import httpx
@@ -18,6 +19,8 @@ from danmaku_pet.models import ActionPlan, DecisionResult, Event
 from danmaku_pet.persona import Persona
 
 logger = logging.getLogger(__name__)
+
+_TIME_KEYWORDS = ("几点", "时间", "日期", "几号", "星期几", "周几", "今天")
 
 
 class DecisionError(RuntimeError):
@@ -173,12 +176,19 @@ class MockDecisionEngine:
     async def decide(self, event: Event, memory: ConversationMemory) -> DecisionResult:
         await asyncio.sleep(0.05)
         text = event.text.lower()
-        for keywords, reply, emotion, motion in self._RULES:
-            if any(keyword in text for keyword in keywords):
-                break
-        else:
-            reply = f"我是{self.persona.name}，收到{event.user}的弹幕：「{event.text[:32]}」，我在听！"
+        if any(keyword in text for keyword in _TIME_KEYWORDS):
+            # 本地模拟也要能回答时间类问题，用本机时间直接报，别让观众自己看表。
+            now = datetime.now().astimezone()
+            weekday = "一二三四五六日"[now.weekday()]
+            reply = f"现在是 {now:%H:%M}，{now:%m月%d日} 周{weekday}。"
             emotion, motion = "neutral", "nod"
+        else:
+            for keywords, reply, emotion, motion in self._RULES:
+                if any(keyword in text for keyword in keywords):
+                    break
+            else:
+                reply = f"我是{self.persona.name}，收到{event.user}的弹幕：「{event.text[:32]}」，我在听！"
+                emotion, motion = "neutral", "nod"
         plan = ActionPlan(
             reply=reply,
             emotion=emotion,  # type: ignore[arg-type]
