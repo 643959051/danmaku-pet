@@ -1,13 +1,15 @@
 name: release
 
-# 打 v* 标签时自动构建 Windows 便携版，并发布到 GitHub Releases。
-# 配了 GITEE_TOKEN 之后，同一次构建还会同步到 Gitee 发行版。
+# 在 GitHub 的 Windows runner 上打包出便携版 zip。
 #
-# 需要的配置：
-#   仓库 → Settings → Secrets and variables → Actions
-#     GITEE_TOKEN = 你的 Gitee 私人令牌（projects 权限）——可选，不配就只发 GitHub
+# 两种触发方式：
+#   1) 推 v* 标签（自动创建 Release）
+#   2) Actions → release → Run workflow（可只产出构建产物，不发 Release）
 #
-# 手动触发：Actions → release → Run workflow，填一个 tag（例如 v0.1.0）。
+# 需要的配置（仓库 → Settings → Actions → General）：
+#   - Allow all actions and reusable workflows
+#   - Workflow permissions → Read and write permissions（否则发 Release 会 403）
+# 可选 Secret：GITEE_TOKEN（Gitee 私人令牌，projects 权限），配了会同步到 Gitee 发行版。
 
 on:
   push:
@@ -19,6 +21,11 @@ on:
         description: "发行版标签，例如 v0.1.0"
         required: true
         type: string
+      publish:
+        description: "同时创建 GitHub Release；取消勾选则只产出可下载的构建产物"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -74,7 +81,20 @@ jobs:
           } | Set-Content dist/release/SHA256SUMS.txt -Encoding utf8
           Get-Content dist/release/SHA256SUMS.txt
 
+      # 每次运行都上传构建产物：在 run 页面底部 Artifacts 里可以直接下载 zip，
+      # 不需要先有 Release，也不会占用 Release 的资源。
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: DanmakuPet-${{ github.event.inputs.tag || github.ref_name }}-win64
+          path: |
+            dist/release/*.zip
+            dist/release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
       - name: 发布到 GitHub Releases
+        if: ${{ github.event_name == 'push' || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
@@ -88,6 +108,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 同步到 Gitee 发行版（可选）
+        if: ${{ github.event_name == 'push' || inputs.publish }}
         shell: powershell
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
