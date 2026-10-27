@@ -97,16 +97,21 @@ if ($Zip) {
   if (Test-Path $Archive) { Remove-Item $Archive -Force }
 
   # 只打构建产物；.cache / temp / assets / data 是运行时生成的，不能进包。
+  # .env 必须排除：exe 旁边的 .env 可能存着用户自己的 API Key。
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $Skip = @(".cache/", "temp/", "assets/", "data/")
+  $SecretFiles = @(".env", ".env.tmp")
   $zip = [System.IO.Compression.ZipFile]::Open($Archive, "Create")
   try {
     Get-ChildItem $Output -Recurse -File | ForEach-Object {
       $relative = $_.FullName.Substring($Output.Length + 1)
       $normalized = $relative -replace "\\", "/"
-      $skip = $false
-      foreach ($prefix in $Skip) {
-        if ($normalized.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $skip = $true; break }
+      $leaf = ($normalized -split "/")[-1]
+      $skip = $SecretFiles -contains $leaf
+      if (-not $skip) {
+        foreach ($prefix in $Skip) {
+          if ($normalized.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $skip = $true; break }
+        }
       }
       if (-not $skip) {
         [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(

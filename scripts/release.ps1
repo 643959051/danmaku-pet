@@ -101,10 +101,16 @@ function New-PortableZip {
 
 # 运行期目录不打进发行包：它们由 exe 首次启动时自动创建，
 # 打包时如果带着，会把日志、TTS 缓存、布局文件一起发出去。
+# .env 必须排除：exe 旁边的 .env 可能存着用户自己的 API Key。
 $RuntimePrefixes = @(".cache/", "temp/", "assets/", "data/")
+$SecretFiles = @(".env", ".env.tmp")
 function Test-PackageEntry {
   param([string]$Relative, [switch]$AssetsOnly, [switch]$ExcludeAssets)
   $normalized = $Relative -replace "\\", "/"
+  $leaf = ($normalized -split "/")[-1]
+  foreach ($secret in $SecretFiles) {
+    if ($leaf -ieq $secret) { return $false }
+  }
   foreach ($prefix in $RuntimePrefixes) {
     if ($normalized.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
   }
@@ -143,6 +149,18 @@ foreach ($file in $Zips) {
   Write-Host ("  {0}  {1} MB" -f (Split-Path $file -Leaf), [math]::Round($size / 1MB, 1))
   if ($size -gt $LimitBytes) {
     throw "$file 超过 Gitee 单附件 100MB 限制，改用 -Split 拆包"
+  }
+
+  # 兜底检查：任何 .env / .env.tmp 都不允许出现在分发包里（可能含 API Key）。
+  $archive = [System.IO.Compression.ZipFile]::OpenRead($file)
+  try {
+    $leaked = @($archive.Entries | Where-Object { $SecretFiles -contains $_.Name })
+  } finally {
+    $archive.Dispose()
+  }
+  if ($leaked.Count -gt 0) {
+    Remove-Item $file -Force
+    throw "$file 里发现了 .env（可能含密钥），已删除该包；请检查 $Portable 并删除 .env 后重试"
   }
 }
 

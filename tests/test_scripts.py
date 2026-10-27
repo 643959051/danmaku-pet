@@ -35,3 +35,18 @@ def test_release_script_packages_one_versioned_zip() -> None:
     assert "[switch]$Split" in text
     # Gitee 单附件上限 100 MB，脚本必须自己守住这个门槛
     assert "$LimitBytes = 100MB" in text
+
+
+@pytest.mark.parametrize("name", ["build_exe.ps1", "release.ps1"])
+def test_packaging_never_ships_the_local_env(name: str) -> None:
+    """exe 旁边的 .env 可能存着用户的 API Key，不能进发行包。"""
+
+    text = (ROOT / "scripts" / name).read_text(encoding="utf-8-sig")
+    assert "$SecretFiles" in text
+    assert '".env"' in text and '".env.tmp"' in text
+
+
+def test_release_script_rechecks_the_archive_for_secrets() -> None:
+    text = (ROOT / "scripts" / "release.ps1").read_text(encoding="utf-8-sig")
+    assert "OpenRead" in text
+    assert "发现了 .env" in text
