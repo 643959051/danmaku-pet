@@ -26,9 +26,12 @@ def test_non_ascii_powershell_scripts_are_utf8_with_bom(script: Path) -> None:
     raw.decode("utf-8-sig")  # must stay decodable as UTF-8
 
 
-def test_release_script_uses_the_package_version() -> None:
+def test_release_script_packages_one_versioned_zip() -> None:
     text = (ROOT / "scripts" / "release.ps1").read_text(encoding="utf-8-sig")
     assert "danmaku_pet.__version__" in text
     assert "attach_files" in text
+    # 默认打一个带版本号的包，只有 -Split 才拆成两个
+    assert 'DanmakuPet-$Version-win64.zip' in text
+    assert "[switch]$Split" in text
     # Gitee 单附件上限 100 MB，脚本必须自己守住这个门槛
-    assert "$LimitMb = 100" in text
+    assert "$LimitBytes = 100MB" in text

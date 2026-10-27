@@ -1,21 +1,28 @@
 ﻿<#
 .SYNOPSIS
-  一键发布：打包便携版 → 生成发行包 → 创建 Gitee 发行版并上传附件。
+  一键发布：打包便携版 → 生成一个带版本号的 zip → 创建 Gitee 发行版并上传附件。
 
 .DESCRIPTION
-  为什么是两个包：Gitee 发行版单个附件上限 100 MB，完整便携包压缩后约 118 MB。
-  所以拆成「主程序 + 桌宠素材」两个 zip，都解压到同一个文件夹即可合并：
+  产物是一个目录（里面只有一个 DanmakuPet.exe）压成一个包：
 
-      DanmakuPet-<版本>-win64.zip          主程序（exe + 运行时）
-      DanmakuPet-<版本>-win64-assets.zip   桌宠素材（_internal/vendor/.../assets）
+      dist/release/DanmakuPet-<版本>-win64.zip
+
+  解压 → 双击 DanmakuPet.exe 即可运行，删除目录即卸载。
+
+  注意：Gitee 发行版单个附件上限 100 MB。正常构建约 98 MB，在限制内；
+  如果某次依赖变大导致超限，可以加 -Split 拆成「主程序 + 桌宠素材」两个包。
 
 .EXAMPLE
   $env:GITEE_TOKEN = "你的 Gitee 私人令牌"
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0
 
 .EXAMPLE
-  # 只打包不上传，之后在网页上手动拖拽两个 zip
+  # 只打包不上传，之后在网页上手动拖拽 zip
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -NoUpload
+
+.EXAMPLE
+  # 附件超过 100 MB 时拆成两个包
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Split
 
 .NOTES
   令牌在 Gitee → 设置 → 私人令牌 生成，勾选 projects 权限；用完可以撤销。
@@ -32,7 +39,8 @@ param(
   [switch]$SkipBuild,
   [switch]$Prerelease,
   [switch]$NoUpload,
-  [switch]$NoTag
+  [switch]$NoTag,
+  [switch]$Split
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +49,7 @@ if (-not $Python) { $Python = Join-Path $Root ".conda\env\python.exe" }
 $Portable = Join-Path $Root "dist\DanmakuPet"
 $ReleaseDir = Join-Path $Root "dist\release"
 $AssetsRelative = "_internal\vendor\dafeiyu\package\assets"
+$LimitBytes = 100MB
 
 if (-not (Test-Path $Python)) { throw "找不到 Python：$Python，请用 -Python 指定，或先运行 scripts\install.ps1" }
 
@@ -65,7 +74,7 @@ if (-not (Test-Path (Join-Path $Portable "DanmakuPet.exe"))) {
   throw "找不到 $Portable\DanmakuPet.exe，先运行 scripts\build_exe.ps1"
 }
 
-# 3. 生成两个 zip
+# 3. 压缩包
 New-Item -ItemType Directory -Force $ReleaseDir | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -91,32 +100,39 @@ function New-PortableZip {
   }
 }
 
-$CoreZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64.zip"
-$AssetsZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64-assets.zip"
-
-Write-Host "生成主程序包 …"
-New-PortableZip -ZipPath $CoreZip -BaseDir $Portable -Include {
-  param($relative)
-  -not $relative.StartsWith($AssetsRelative, [System.StringComparison]::OrdinalIgnoreCase)
+if ($Split) {
+  $CoreZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64.zip"
+  $AssetsZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64-assets.zip"
+  Write-Host "生成主程序包 …"
+  New-PortableZip -ZipPath $CoreZip -BaseDir $Portable -Include {
+    param($relative)
+    -not $relative.StartsWith($AssetsRelative, [System.StringComparison]::OrdinalIgnoreCase)
+  }
+  Write-Host "生成桌宠素材包 …"
+  New-PortableZip -ZipPath $AssetsZip -BaseDir $Portable -Include {
+    param($relative)
+    $relative.StartsWith($AssetsRelative, [System.StringComparison]::OrdinalIgnoreCase)
+  }
+  $Zips = @($CoreZip, $AssetsZip)
+} else {
+  $FullZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64.zip"
+  Write-Host "生成发行包 …"
+  New-PortableZip -ZipPath $FullZip -BaseDir $Portable -Include { param($relative) $true }
+  $Zips = @($FullZip)
 }
 
-Write-Host "生成桌宠素材包 …"
-New-PortableZip -ZipPath $AssetsZip -BaseDir $Portable -Include {
-  param($relative)
-  $relative.StartsWith($AssetsRelative, [System.StringComparison]::OrdinalIgnoreCase)
-}
-
-$LimitMb = 100
-foreach ($file in @($CoreZip, $AssetsZip)) {
-  $mb = [math]::Round((Get-Item $file).Length / 1MB, 1)
-  Write-Host ("  {0}  {1} MB" -f (Split-Path $file -Leaf), $mb)
-  if ($mb -gt $LimitMb) { throw "$file 超过 Gitee 单附件 ${LimitMb}MB 限制" }
+foreach ($file in $Zips) {
+  $size = (Get-Item $file).Length
+  Write-Host ("  {0}  {1} MB" -f (Split-Path $file -Leaf), [math]::Round($size / 1MB, 1))
+  if ($size -gt $LimitBytes) {
+    throw "$file 超过 Gitee 单附件 100MB 限制，改用 -Split 拆包"
+  }
 }
 
 # 4. 发行说明
 if ($NotesFile -and (Test-Path $NotesFile)) {
   $Notes = Get-Content $NotesFile -Raw -Encoding UTF8
-} else {
+} elseif ($Split) {
   $Notes = @"
 ## 下载与安装
 
@@ -124,7 +140,7 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 2. 把 DanmakuPet-$Version-win64-assets.zip **解压到同一个目录**（合并 _internal\vendor\...\assets 桌宠素材）
 3. 双击 DanmakuPet.exe
 
-> 分两个包是因为 Gitee 单附件上限 100 MB，完整便携包压缩后约 118 MB。
+> 分两个包是因为 Gitee 单附件上限 100 MB。
 
 ## 首次运行
 
@@ -138,16 +154,36 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 - 便携版，删除目录即卸载，不写注册表
 - 内含 PySide6 / edge-tts / pygame（LGPL），许可见仓库 THIRD_PARTY_NOTICES.md
 "@
+} else {
+  $Notes = @"
+## 下载与安装
+
+1. 解压 DanmakuPet-$Version-win64.zip 到任意目录（例如 D:\DanmakuPet）
+2. 双击目录里的 DanmakuPet.exe
+
+目录里只有一个 exe，其余是它需要的运行时（_internal）。
+
+## 首次运行
+
+- 会在 exe 旁边生成 .env / data/ / assets/ / temp/ / .cache/
+- DeepSeek Key 在网页右上角「设置」里填写，保存到同目录 .env
+- 没有 Key 时自动使用本地模拟决策，界面会明确标注
+- 启动后自动用默认浏览器打开管理页面；从受限终端（低完整性/沙箱）启动时不会自动弹出，见 README「2.3.1」
+
+## 说明
+
+- 便携版，删除目录即卸载，不写注册表
+- 内含 PySide6 / edge-tts / pygame（LGPL），许可见仓库 THIRD_PARTY_NOTICES.md
+"@
 }
 
 # 5. 本地标签（发行版需要 tag）
 Write-Host ""
 if ($NoUpload) {
   Write-Host "已生成发行包（未上传）："
-  Write-Host "  $CoreZip"
-  Write-Host "  $AssetsZip"
+  $Zips | ForEach-Object { Write-Host "  $_" }
   Write-Host ""
-  Write-Host "手动发布：仓库页 → 发行版 → 创建发行版，tag 填 $Tag，把两个 zip 拖进附件。"
+  Write-Host "手动发布：仓库页 → 发行版 → 创建发行版，tag 填 $Tag，把上面的 zip 拖进附件。"
   exit 0
 }
 
@@ -195,12 +231,12 @@ Write-Host "发行版 id：$($Release.id)"
 $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
 if (-not $Curl) { throw "找不到 curl.exe（Windows 10+ 自带），请改用 -NoUpload 手动上传" }
 
-foreach ($zip in @($CoreZip, $AssetsZip)) {
+foreach ($zip in $Zips) {
   Write-Host "上传 $(Split-Path $zip -Leaf) …"
   $response = & $Curl -sS -X POST "$Api/releases/$($Release.id)/attach_files" `
     -F "access_token=$Token" -F "file=@$zip"
   if ($response -notmatch "browser_download_url|download_url") {
-    throw "上传失败：$(($response | Out-String).Trim())"
+    throw "上传失败：$(($response | Out-String).Trim())  提示：若提示超出大小限制，加 -Split 拆包后重试"
   }
   Write-Host "  完成"
 }

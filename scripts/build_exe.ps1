@@ -87,9 +87,16 @@ Write-Host "目录大小：$SizeMb MB"
 Write-Host "双击 exe 即可启动；首次会生成 .env / data / temp / assets 等运行目录。"
 
 if ($Zip) {
-  $Archive = Join-Path $Dist "DanmakuPet-win64.zip"
+  Push-Location $Root
+  try {
+    $Version = (& $Python -c "import danmaku_pet,sys;sys.stdout.write(danmaku_pet.__version__)").Trim()
+  } finally {
+    Pop-Location
+  }
+  $Archive = Join-Path $Dist "DanmakuPet-$Version-win64.zip"
   if (Test-Path $Archive) { Remove-Item $Archive -Force }
-  Compress-Archive -Path $Output -DestinationPath $Archive -CompressionLevel Optimal
+  # 用 * 让压缩包的根目录直接是 DanmakuPet.exe / _internal，解压不多一层
+  Compress-Archive -Path (Join-Path $Output "*") -DestinationPath $Archive -CompressionLevel Optimal
   $ZipMb = [math]::Round(((Get-Item $Archive).Length / 1MB), 1)
   Write-Host "已压缩：$Archive（$ZipMb MB）"
 }

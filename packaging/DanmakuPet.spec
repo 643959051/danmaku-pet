@@ -110,6 +110,7 @@ excludes = [
     "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets",
     "PySide6.QtNfc",
+    "PySide6.QtNetwork",
     "PySide6.QtPdf",
     "PySide6.QtPdfWidgets",
     "PySide6.QtPositioning",
@@ -144,6 +145,52 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Qt 的 hook 会把整条依赖链都收进来，这里再按实际用到的模块裁剪。
+# 桌宠只用 QtCore / QtGui / QtWidgets 的 raster 绘制，不用 QML、PDF、OpenGL、
+# QtNetwork，也不需要 Qt 自带的翻译文件。
+PRUNE_MODULES = (
+    "opengl32sw.dll",  # 软件 OpenGL 兜底，widgets 走 raster 用不到
+    "qt6quick.dll",
+    "qt6qml.dll",
+    "qt6qmlmodels.dll",
+    "qt6pdf.dll",
+    "qt6opengl.dll",
+    "qt6network.dll",
+    "qt6quickwidgets.dll",
+    "qdirect2d.dll",  # 平台插件只留 qwindows
+    "qminimal.dll",
+    "qoffscreen.dll",
+    "qtiff.dll",  # 图片格式只留 ico / jpeg / webp
+    "qicns.dll",
+    "qgif.dll",
+    "qpdf.dll",
+    "qsvg.dll",
+    "qtga.dll",
+    "qwbmp.dll",
+)
+PRUNE_DATA_PREFIXES = (
+    "pyside6/translations/",
+    "pyside6/plugins/tls/",
+    "pyside6/plugins/networkinformation/",
+    "pyside6/plugins/platforminputcontexts/",
+    "pyside6/plugins/generic/",
+)
+
+
+def _keep_binary(entry: tuple) -> bool:
+    return Path(entry[0]).name.lower() not in PRUNE_MODULES
+
+
+def _keep_data(entry: tuple) -> bool:
+    name = entry[0].replace("\\", "/").lower()
+    return not any(name.startswith(prefix) for prefix in PRUNE_DATA_PREFIXES)
+
+
+_before = len(a.binaries), len(a.datas)
+a.binaries = TOC([entry for entry in a.binaries if _keep_binary(entry)])
+a.datas = TOC([entry for entry in a.datas if _keep_data(entry)])
+print(f"[spec] 裁剪二进制 {_before[0] - len(a.binaries)} 项，数据 {_before[1] - len(a.datas)} 项")
 
 pyz = PYZ(a.pure)
 

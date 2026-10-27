@@ -183,7 +183,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 # 打包（首次会自动把 PyInstaller 装进项目环境）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean
 
-# 打包并压成可分发的 zip
+# 打包并压成一个带版本号的 zip
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean -Zip
 ```
 
@@ -191,7 +191,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Cle
 
 ```text
 dist/DanmakuPet/
-├─ DanmakuPet.exe        双击即启动（控制台窗口里能看到日志和地址）
+├─ DanmakuPet.exe        唯一的 exe，双击即启动（控制台窗口里能看到日志和地址）
 ├─ _internal/            运行时、PySide6、网页、桌宠素材
 ├─ .env.example          配置样例
 └─ （首次运行生成）.env / data/ / assets/ / temp/ / .cache/
@@ -200,10 +200,13 @@ dist/DanmakuPet/
 - 整个 `dist/DanmakuPet` 文件夹就是绿色版，拷到任何目录都能用；删除即卸载，不写注册表。
 - 首次运行会在 exe 旁边生成 `data/persona.json`（从内置默认复制）、`assets/tts_cache/`、`temp/`、`.cache/`。DeepSeek Key 可以在网页右上角 **设置** 里填，会写进同目录的 `.env`，下次启动生效。
 - 打包内容只包含运行时需要的东西：`danmaku_pet/web`、内置人设、`vendor/dafeiyu/package/runtime/*.py` 与 `assets/`；`vendor` 里的文档、`node_modules`、`native/`，以及 `runtime/bin`（上游附带的 174 MB 预编译 helper）都不会进包。
-- 体积约 201 MB（PySide6 约 93 MB + 桌宠素材约 55 MB + 其余运行时），启动约 2–4 秒。
+- 体积：目录约 **150 MB**，压成一个 zip 约 **98 MB**（PySide6 约 46 MB + 桌宠素材约 55 MB + 其余运行时），启动约 2–4 秒。
+- PyInstaller 会把 Qt 的整条依赖链收进来，spec 里做了裁剪：去掉 `opengl32sw.dll`、Qt6Quick/Qml/Pdf/OpenGL/Network、Qt 翻译文件、多余的平台与图片插件，只保留 `QtCore/QtGui/QtWidgets` 的 raster 绘制所需部分。
 - 构建配置在 [`packaging/DanmakuPet.spec`](packaging/DanmakuPet.spec)，入口是 [`packaging/launcher.py`](packaging/launcher.py)。
 - 桌宠在打包后不是子脚本而是**同一个 exe 以 `--run-dafeiyu-helper` 重入**运行（`danmaku_pet/paths.py` 把只读资源指向 `_internal`，可写目录指向 exe 所在文件夹）。
 - exe 同样受「完整性级别」影响（见 2.3.1）：从开始菜单双击/普通窗口运行时是「中」，浏览器能正常弹出；如果从受限终端启动，浏览器仍会被 Windows 拦下。
+
+> 这里用的是 PyInstaller **onedir**：目录里只有一个 exe，其余是它运行时需要的 DLL 和资源。没有用 `--onefile`，因为单文件每次启动都要把 150 MB 解压到临时目录（首启 5–10 秒），桌宠子进程还会再解压一份；而且 LGPL 组件保持为可替换的独立 DLL 更符合许可要求。
 
 > 打包需要写 `dist/`、`build/` 和项目的 `.cache/pip`，都在工作区内，不会装到全局 Python。
 
@@ -216,16 +219,13 @@ $env:GITEE_TOKEN = "你的 Gitee 私人令牌"   # Gitee → 设置 → 私人�
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0
 ```
 
-它会依次完成：打包便携版 → 生成发行包 → 推送 tag → 创建发行版 → 上传附件。
+它会依次完成：打包便携版 → 生成**一个**带版本号的 zip → 推送 tag → 创建发行版 → 上传附件。
 
-**为什么是两个包**：Gitee 发行版单个附件上限 **100 MB**，完整便携包压缩后约 118 MB。
+```text
+dist/release/DanmakuPet-0.1.0-win64.zip    98.3 MB
+```
 
-| 文件 | 压缩后 | 内容 |
-| --- | --- | --- |
-| `DanmakuPet-0.1.0-win64.zip` | 62.8 MB | exe + 运行时 + 网页 + 桌宠代码 |
-| `DanmakuPet-0.1.0-win64-assets.zip` | 55.4 MB | 桌宠素材 `_internal\vendor\...\assets` |
-
-两个包都解压到**同一个目录**即合并（实测解压后 202.7 MB，`--check` 通过）。
+解压后是一个目录，里面只有一个 `DanmakuPet.exe`，双击即可运行。
 
 常用参数：
 
@@ -238,8 +238,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -SkipB
 
 # 自定义发行说明 / 标记预览版
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0 -NotesFile .\release-notes.md -Prerelease
+
+# 万一以后依赖变大、附件超过 100 MB：拆成「主程序 + 素材」两个包
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0 -Split
 ```
 
+- Gitee 发行版单个附件上限 **100 MB**；正常构建的整包约 98 MB，留了约 2 MB 余量。真超了就 `-Split`。
 - 令牌只在本机进程内使用，脚本不会把它写进仓库或 `.git/config`；用完可在 Gitee 撤销。
 - 附件上传走 Gitee Open API（`POST /repos/{owner}/{repo}/releases/{id}/attach_files`），用的是 Windows 自带的 `curl.exe`。
 - Gitee Go 仍然适合跑单元测试（Linux + pytest），但它不产 exe；想完全云端构建 Windows 包，用下面的 GitHub Actions。
@@ -267,9 +271,9 @@ checkout
  -> pip install -r requirements.txt pyinstaller
  -> scripts/fetch_visual.ps1（含 spin 补丁）
  -> pytest -q
- -> scripts/release.ps1 -NoUpload -NoTag    # 打包 + 生成两个 <100MB 的包
+ -> scripts/release.ps1 -NoUpload -NoTag    # 打包 + 生成一个带版本号的 zip
  -> 生成 SHA256SUMS.txt
- -> 上传到 GitHub Releases（两个 zip + 校验和）
+ -> 上传到 GitHub Releases（zip + 校验和）
  -> 若配置了 GITEE_TOKEN：再调 Gitee API 同步一份发行版
 ```
 
@@ -284,7 +288,7 @@ checkout
 1. **Actions 已启用**：Settings → Actions → General → Allow all actions。
 2. **Workflow permissions 设为 Read and write**：同一页往下拉，否则上传 Release 会被 403 拒绝。
 
-相比 Gitee 那边：GitHub 单个 Release 附件上限是 2 GB，其实可以只发一个 118 MB 的完整包；这里仍保持「主程序 + 素材」两个包，是为了让两个平台的下载说明完全一致。
+GitHub 单个 Release 附件上限是 2 GB，和 Gitee 共用同一个 98 MB 的包，两个平台下载下来的内容完全一致。
 
 ---
 
