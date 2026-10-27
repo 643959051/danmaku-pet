@@ -95,8 +95,27 @@ if ($Zip) {
   }
   $Archive = Join-Path $Dist "DanmakuPet-$Version-win64.zip"
   if (Test-Path $Archive) { Remove-Item $Archive -Force }
-  # 用 * 让压缩包的根目录直接是 DanmakuPet.exe / _internal，解压不多一层
-  Compress-Archive -Path (Join-Path $Output "*") -DestinationPath $Archive -CompressionLevel Optimal
+
+  # 只打构建产物；.cache / temp / assets / data 是运行时生成的，不能进包。
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $Skip = @(".cache/", "temp/", "assets/", "data/")
+  $zip = [System.IO.Compression.ZipFile]::Open($Archive, "Create")
+  try {
+    Get-ChildItem $Output -Recurse -File | ForEach-Object {
+      $relative = $_.FullName.Substring($Output.Length + 1)
+      $normalized = $relative -replace "\\", "/"
+      $skip = $false
+      foreach ($prefix in $Skip) {
+        if ($normalized.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $skip = $true; break }
+      }
+      if (-not $skip) {
+        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+          $zip, $_.FullName, $normalized, [System.IO.Compression.CompressionLevel]::Optimal)
+      }
+    }
+  } finally {
+    $zip.Dispose()
+  }
   $ZipMb = [math]::Round(((Get-Item $Archive).Length / 1MB), 1)
   Write-Host "已压缩：$Archive（$ZipMb MB）"
 }

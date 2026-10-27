@@ -48,7 +48,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 if (-not $Python) { $Python = Join-Path $Root ".conda\env\python.exe" }
 $Portable = Join-Path $Root "dist\DanmakuPet"
 $ReleaseDir = Join-Path $Root "dist\release"
-$AssetsRelative = "_internal\vendor\dafeiyu\package\assets"
 $LimitBytes = 100MB
 
 if (-not (Test-Path $Python)) { throw "找不到 Python：$Python，请用 -Python 指定，或先运行 scripts\install.ps1" }
@@ -100,24 +99,42 @@ function New-PortableZip {
   }
 }
 
+# 运行期目录不打进发行包：它们由 exe 首次启动时自动创建，
+# 打包时如果带着，会把日志、TTS 缓存、布局文件一起发出去。
+$RuntimePrefixes = @(".cache/", "temp/", "assets/", "data/")
+function Test-PackageEntry {
+  param([string]$Relative, [switch]$AssetsOnly, [switch]$ExcludeAssets)
+  $normalized = $Relative -replace "\\", "/"
+  foreach ($prefix in $RuntimePrefixes) {
+    if ($normalized.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+  }
+  $isAssets = $normalized.StartsWith("_internal/vendor/dafeiyu/package/assets/", [System.StringComparison]::OrdinalIgnoreCase)
+  if ($AssetsOnly) { return $isAssets }
+  if ($ExcludeAssets) { return -not $isAssets }
+  return $true
+}
+
 if ($Split) {
   $CoreZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64.zip"
   $AssetsZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64-assets.zip"
   Write-Host "生成主程序包 …"
   New-PortableZip -ZipPath $CoreZip -BaseDir $Portable -Include {
     param($relative)
-    -not $relative.StartsWith($AssetsRelative, [System.StringComparison]::OrdinalIgnoreCase)
+    Test-PackageEntry -Relative $relative -ExcludeAssets
   }
   Write-Host "生成桌宠素材包 …"
   New-PortableZip -ZipPath $AssetsZip -BaseDir $Portable -Include {
     param($relative)
-    $relative.StartsWith($AssetsRelative, [System.StringComparison]::OrdinalIgnoreCase)
+    Test-PackageEntry -Relative $relative -AssetsOnly
   }
   $Zips = @($CoreZip, $AssetsZip)
 } else {
   $FullZip = Join-Path $ReleaseDir "DanmakuPet-$Version-win64.zip"
   Write-Host "生成发行包 …"
-  New-PortableZip -ZipPath $FullZip -BaseDir $Portable -Include { param($relative) $true }
+  New-PortableZip -ZipPath $FullZip -BaseDir $Portable -Include {
+    param($relative)
+    Test-PackageEntry -Relative $relative
+  }
   $Zips = @($FullZip)
 }
 
