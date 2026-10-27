@@ -28,19 +28,21 @@ param(
   [string]$Owner = "duruixuan",
   [string]$Repo = "danmaku-pet",
   [string]$Branch = "master",
+  [string]$Python = "",
   [switch]$SkipBuild,
   [switch]$Prerelease,
-  [switch]$NoUpload
+  [switch]$NoUpload,
+  [switch]$NoTag
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$Python = Join-Path $Root ".conda\env\python.exe"
+if (-not $Python) { $Python = Join-Path $Root ".conda\env\python.exe" }
 $Portable = Join-Path $Root "dist\DanmakuPet"
 $ReleaseDir = Join-Path $Root "dist\release"
 $AssetsRelative = "_internal\vendor\dafeiyu\package\assets"
 
-if (-not (Test-Path $Python)) { throw "找不到项目 Python：$Python，请先运行 scripts\install.ps1" }
+if (-not (Test-Path $Python)) { throw "找不到 Python：$Python，请用 -Python 指定，或先运行 scripts\install.ps1" }
 
 # 1. 版本号 / 标题
 Push-Location $Root
@@ -56,7 +58,7 @@ Write-Host "版本：$Version    Tag：$Tag"
 # 2. 打包
 if (-not $SkipBuild) {
   Write-Host "开始打包便携版 …"
-  & (Join-Path $PSScriptRoot "build_exe.ps1") -Clean
+  & (Join-Path $PSScriptRoot "build_exe.ps1") -Clean -Python $Python
   if ($LASTEXITCODE -ne 0) { throw "build_exe.ps1 失败（退出码 $LASTEXITCODE）" }
 }
 if (-not (Test-Path (Join-Path $Portable "DanmakuPet.exe"))) {
@@ -149,15 +151,17 @@ if ($NoUpload) {
   exit 0
 }
 
-Push-Location $Root
-try {
-  git tag $Tag 2>$null
-  $env:GIT_TERMINAL_PROMPT = "0"
-  git push origin $Tag 2>&1 | Out-Null
-} catch {
-  Write-Host "提示：推送 tag 失败（已跳过），发行版仍会尝试创建同名 tag"
-} finally {
-  Pop-Location
+if (-not $NoTag) {
+  Push-Location $Root
+  try {
+    git tag $Tag 2>$null
+    $env:GIT_TERMINAL_PROMPT = "0"
+    git push origin $Tag 2>&1 | Out-Null
+  } catch {
+    Write-Host "提示：推送 tag 失败（已跳过），发行版仍会尝试创建同名 tag"
+  } finally {
+    Pop-Location
+  }
 }
 
 if (-not $Token) {

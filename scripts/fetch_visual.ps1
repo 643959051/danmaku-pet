@@ -1,12 +1,13 @@
-param(
-  [string]$Version = "0.1.21"
+﻿param(
+  [string]$Version = "0.1.21",
+  [string]$Python = ""
 )
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Vendor = Join-Path $Root "vendor"
 $Package = Join-Path $Vendor "dafeiyu\package"
 $Helper = Join-Path $Package "runtime\helper.py"
-$Python = Join-Path $Root ".conda\env\python.exe"
+if (-not $Python) { $Python = Join-Path $Root ".conda\env\python.exe" }
 $PatchScript = Join-Path $PSScriptRoot "apply_dafeiyu_spin_patch.py"
 
 if (Test-Path $Helper) {

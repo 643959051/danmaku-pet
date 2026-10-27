@@ -8,25 +8,39 @@
 .EXAMPLE
   # 重新打包并压缩成便于分发的 zip
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean -Zip
+
+.EXAMPLE
+  # CI 用：显式指定解释器，不依赖 .conda
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean -Python C:\hostedtoolcache\python\3.11\python.exe
 #>
 param(
   [switch]$Clean,
-  [switch]$Zip
+  [switch]$Zip,
+  [string]$Python = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$Python = Join-Path $Root ".conda\env\python.exe"
+if (-not $Python) { $Python = Join-Path $Root ".conda\env\python.exe" }
 $Spec = Join-Path $Root "packaging\DanmakuPet.spec"
 $Dist = Join-Path $Root "dist"
 $Build = Join-Path $Root "build"
 $Output = Join-Path $Dist "DanmakuPet"
 
 if (-not (Test-Path $Python)) {
-  throw "找不到项目 Python：$Python。请先运行 scripts\install.ps1。"
+  throw "找不到项目 Python：$Python。请先运行 scripts\install.ps1，或用 -Python 指定解释器。"
 }
 if (-not (Test-Path $Spec)) {
   throw "找不到打包脚本：$Spec"
+}
+
+# 干净克隆里没有 data/persona.json（被 gitignore），用示例补一份，保证包内人设一致。
+$PersonaExample = Join-Path $Root "data\persona.example.json"
+$Persona = Join-Path $Root "data\persona.json"
+if (-not (Test-Path $Persona) -and (Test-Path $PersonaExample)) {
+  New-Item -ItemType Directory -Force (Split-Path $Persona -Parent) | Out-Null
+  Copy-Item $PersonaExample $Persona
+  Write-Host "已从 data\persona.example.json 生成 data\persona.json"
 }
 
 # 所有缓存/临时文件都留在工作区内，和 run.ps1 保持一致。

@@ -242,7 +242,49 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v
 
 - 令牌只在本机进程内使用，脚本不会把它写进仓库或 `.git/config`；用完可在 Gitee 撤销。
 - 附件上传走 Gitee Open API（`POST /repos/{owner}/{repo}/releases/{id}/attach_files`），用的是 Windows 自带的 `curl.exe`。
-- Gitee Go 仍然适合跑单元测试（Linux + pytest），但它不产 exe；想完全云端构建 Windows 包，需要 GitHub Actions 的 `windows-latest` 再回调 Gitee API 上传。
+- Gitee Go 仍然适合跑单元测试（Linux + pytest），但它不产 exe；想完全云端构建 Windows 包，用下面的 GitHub Actions。
+
+### 2.7 GitHub 自动打包（Actions）
+
+仓库在 Gitee 和 GitHub 各有一份。GitHub 的 Actions 有 **Windows runner**，所以**打包在 GitHub 云端完成**，Gitee 那边只收结果。
+
+触发方式（见 [`.github/workflows/release.yml`](.github/workflows/release.yml)）：
+
+```powershell
+# 打标签即触发
+git tag v0.1.0
+git push github v0.1.0      # GitHub 远端
+git push origin v0.1.0      # Gitee 远端（可选，两边保持一致）
+```
+
+也可以手动触发：GitHub → Actions → `release` → **Run workflow**，填一个 tag。
+
+流水线做的事：
+
+```text
+checkout
+ -> 装 Node（npm pack 拉 dafeiyu）和 Python 3.11
+ -> pip install -r requirements.txt pyinstaller
+ -> scripts/fetch_visual.ps1（含 spin 补丁）
+ -> pytest -q
+ -> scripts/release.ps1 -NoUpload -NoTag    # 打包 + 生成两个 <100MB 的包
+ -> 生成 SHA256SUMS.txt
+ -> 上传到 GitHub Releases（两个 zip + 校验和）
+ -> 若配置了 GITEE_TOKEN：再调 Gitee API 同步一份发行版
+```
+
+只需要一个可选配置：
+
+| 位置 | 名称 | 用途 |
+| --- | --- | --- |
+| Settings → Secrets and variables → Actions | `GITEE_TOKEN` | 可选。填了就同步到 Gitee 发行版，不填就只发 GitHub |
+
+首次使用还要确认两件事：
+
+1. **Actions 已启用**：Settings → Actions → General → Allow all actions。
+2. **Workflow permissions 设为 Read and write**：同一页往下拉，否则上传 Release 会被 403 拒绝。
+
+相比 Gitee 那边：GitHub 单个 Release 附件上限是 2 GB，其实可以只发一个 118 MB 的完整包；这里仍保持「主程序 + 素材」两个包，是为了让两个平台的下载说明完全一致。
 
 ---
 
