@@ -250,7 +250,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v
 
 ### 2.7 GitHub 自动打包（Actions）
 
-仓库在 Gitee 和 GitHub 各有一份。GitHub 的 Actions 有 **Windows runner**，所以**打包在 GitHub 云端完成**，Gitee 那边只收结果。
+仓库在 Gitee 和 GitHub 各有一份。GitHub 的 Actions 有 **Windows runner**，所以**打包在 GitHub 云端完成**；Gitee 默认不参与，需要时再单独同步（见下面的 `sync_gitee`）。
 
 触发方式（见 [`.github/workflows/release.yml`](.github/workflows/release.yml)）：
 
@@ -274,21 +274,26 @@ checkout
  -> scripts/release.ps1 -NoUpload -NoTag    # 打包 + 生成一个带版本号的 zip
  -> 生成 SHA256SUMS.txt
  -> 上传到 GitHub Releases（zip + 校验和）
- -> 若配置了 GITEE_TOKEN：再调 Gitee API 同步一份发行版
+ -> 只有手动触发并勾选 sync_gitee，才调 Gitee API 同步一份发行版
 ```
+
+默认不传 Gitee 的原因：GitHub 的 runner 在境外，往 Gitee 传 97 MB 是跨境单连接，经常十几分钟还没完。要 Gitee 也有一份时，两个办法：
+
+- 手动触发 workflow 时勾选 `sync_gitee`（步骤上限 40 分钟）；
+- 或者从 run 页面的 Artifacts 下载 zip，在本机跑 `scripts/release.ps1 -SkipBuild -Token <令牌>` 补传——国内网络上快得多。
 
 只需要一个可选配置：
 
 | 位置 | 名称 | 用途 |
 | --- | --- | --- |
-| Settings → Secrets and variables → Actions | `GITEE_TOKEN` | 可选。填了就同步到 Gitee 发行版，不填就只发 GitHub |
+| Settings → Secrets and variables → Actions | `GITEE_TOKEN` | 可选。只在勾选 `sync_gitee` 的手动构建里用到；不填就跳过 Gitee 上传 |
 
 首次使用还要确认两件事：
 
 1. **Actions 已启用**：Settings → Actions → General → Allow all actions。
 2. **Workflow permissions 设为 Read and write**：同一页往下拉，否则上传 Release 会被 403 拒绝。
 
-GitHub 单个 Release 附件上限是 2 GB，和 Gitee 共用同一个 98 MB 的包，两个平台下载下来的内容完全一致。
+GitHub 单个 Release 附件上限是 2 GB，这个 98 MB 的包远在限内。Gitee 发行版的附件上限是 100 MB，只有勾选 `sync_gitee` 时才会碰到这个限制。
 
 ---
 

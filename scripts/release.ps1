@@ -249,8 +249,9 @@ $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
 if (-not $Curl) { throw "找不到 curl.exe（Windows 10+ 自带），请改用 -NoUpload 手动上传" }
 
 foreach ($zip in $Zips) {
-  Write-Host "上传 $(Split-Path $zip -Leaf) …"
-  $response = & $Curl -sS -X POST "$Api/releases/$($Release.id)/attach_files" `
+  Write-Host "上传 $(Split-Path $zip -Leaf) …（跨境链路较慢，单包最多等 30 分钟）"
+  $response = & $Curl -sS --connect-timeout 30 --max-time 1800 --retry 3 --retry-delay 15 `
+    -X POST "$Api/releases/$($Release.id)/attach_files" `
     -F "access_token=$Token" -F "file=@$zip"
   if ($response -notmatch "browser_download_url|download_url") {
     throw "上传失败：$(($response | Out-String).Trim())  提示：若提示超出大小限制，加 -Split 拆包后重试"
