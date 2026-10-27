@@ -11,7 +11,7 @@ manual / simulator     DeepSeek JSON / 礼物剧本         dsh-dafeiyu + EdgeTT
 - DeepSeek 严格 JSON 决策，枚举校验 + 兜底；没有 Key 时明确降级为本地模拟
 - 原生桌面小人（dsh-dafeiyu）+ EdgeTTS + pygame，动作时长与语音对齐
 - 支持打包成便携版 exe（PyInstaller onedir，约 201 MB）
-- 73 项 pytest 测试
+- 80 项 pytest 测试
 
 > MIT 许可。第三方依赖与角色素材的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -40,7 +40,7 @@ manual / simulator     DeepSeek JSON / 礼物剧本         dsh-dafeiyu + EdgeTT
 - 启动监听成功后自动打开默认浏览器（以服务端收到 `/` 请求为准）；`--no-browser` 可关闭，`--check-browser` 可查看启动环境
 - 网页管理端：配置 DeepSeek Key / 模式 / 模型 / Base URL，保存到工作区 `.env` 并热切换
 - 主动回复：全局“回复上一条”，以及时间线里每条弹幕的“回复这条”
-- 73 项自动化测试通过；原生窗口、TTS、HTTP、WebSocket 均已实机跑通，便携版 exe 已打包验证
+- 80 项自动化测试通过；原生窗口、TTS、HTTP、WebSocket 均已实机跑通，便携版 exe 已打包验证
 
 ---
 
@@ -321,10 +321,11 @@ douyin-live/
 │  │  ├─ backend.py            perform()：原生窗口 + 音频 + WebSocket
 │  │  └─ tts.py                EdgeTTS 合成、缓存、pygame 播放
 │  └─ web/                     index.html / styles.css / app.js
-├─ tests/                      73 项单元与编排测试
+├─ tests/                      80 项单元与编排测试
 ├─ packaging/
 │  ├─ DanmakuPet.spec          PyInstaller 打包配置（onedir）
 │  └─ launcher.py              打包后的入口
+├─ .github/workflows/release.yml  打 tag 自动构建 Windows 便携版并发 Release
 ├─ scripts/
 │  ├─ install.ps1              从零安装
 │  ├─ run.ps1                  本地启动
@@ -604,7 +605,7 @@ dafeiyu 本身没有动作级 API，所以本项目给它的本地 helper 加了
 当前结果：
 
 ```text
-73 passed
+80 passed
 ```
 
 覆盖：
