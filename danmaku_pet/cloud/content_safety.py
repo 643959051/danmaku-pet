@@ -80,6 +80,21 @@ class ContentGuard:
         self.fallback_reply = fallback_reply
 
     # ------------------------------------------------------------------ input
+    def check_name(self, name: str) -> SafetyVerdict:
+        """Local nickname check before the platform API sees it.
+
+        The official content-security API is authoritative for homophones and
+        evasive spellings; this only drops the obvious blocked-word cases and
+        trims the display name to the Event contract's 40-character limit.
+        """
+
+        cleaned = clean_text(name, limit=40)
+        if not cleaned:
+            return SafetyVerdict(True, "观众")
+        if self._banned(cleaned):
+            return SafetyVerdict(False, cleaned, "blocked_word")
+        return SafetyVerdict(True, cleaned)
+
     def check_comment(self, text: str) -> SafetyVerdict:
         cleaned = clean_text(text, limit=self.max_comment_chars)
         if not cleaned:

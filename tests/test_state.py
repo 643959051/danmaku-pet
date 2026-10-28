@@ -81,6 +81,9 @@ async def test_memory_store_persona_roundtrip() -> None:
         assert await store.load_persona() is None
         await store.save_persona({"name": "小盐"})
         assert (await store.load_persona())["name"] == "小盐"
+        await store.cache_set("token", {"value": "abc"}, 60)
+        assert await store.cache_get("token") == {"value": "abc"}
+        assert await store.cache_get("missing") is None
     finally:
         await store.close()
 
@@ -143,6 +146,8 @@ async def test_redis_store_serializes_rooms_and_uses_atomic_dedup() -> None:
 
         await store.save_persona({"name": "小盐"})
         assert (await store.load_persona()) == {"name": "小盐"}
+        await store.cache_set("token", {"value": "abc"}, 60)
+        assert await store.cache_get("token") == {"value": "abc"}
 
         async with store.lock("room-a"):
             assert any(key.startswith("dmp:lock:") for key in client.data)

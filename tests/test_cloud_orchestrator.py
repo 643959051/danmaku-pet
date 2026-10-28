@@ -13,6 +13,7 @@ from danmaku_pet.cloud.orchestrator import CloudOrchestrator
 from danmaku_pet.cloud.sessions import SessionRegistry
 from danmaku_pet.cloud.state import MemoryStateStore
 from danmaku_pet.decision.validator import FALLBACK_REPLY
+from danmaku_pet.douyin.content_security import ContentSecurityVerdict
 from danmaku_pet.shared.commands import PerformResult
 from tests.support import (
     FakeEngine,
@@ -37,12 +38,23 @@ class FailingEngine:
         return None
 
 
+class FakeContentSecurity:
+    def __init__(self, verdict: ContentSecurityVerdict) -> None:
+        self.verdict = verdict
+        self.calls = 0
+
+    async def check(self, text: str, *, user: str = "") -> ContentSecurityVerdict:
+        self.calls += 1
+        return self.verdict
+
+
 def build_orchestrator(
     config: CloudConfig,
     *,
     engine: Any | None = None,
     gateway: FakeGateway | None = None,
     store: MemoryStateStore | None = None,
+    content_security: Any | None = None,
 ):
     broadcaster = Broadcaster()
     metrics = StageMetrics()
@@ -64,6 +76,7 @@ def build_orchestrator(
         guard=guard,
         metrics=metrics,
         store=store,
+        content_security=content_security,
     )
     return orchestrator, gateway, engine, guard, metrics, store
 
@@ -269,6 +282,90 @@ async def test_blocked_comment_is_dropped(cloud_config: CloudConfig) -> None:
         state = await store.get_room("room-a")
         assert state.stats["dropped"] == 1
         assert engine.calls == 0
+        assert gateway.sent == []
+    finally:
+        await orchestrator.shutdown()
+
+
+async def test_platform_unsafe_nickname_never_reaches_tts(
+    cloud_config: CloudConfig,
+) -> None:
+    cloud_config.auto_reply = True
+    security = FakeContentSecurity(
+        ContentSecurityVerdict(
+            False, status="unsafe", unsafe_fields=("user",), reason="nickname"
+        )
+    )
+    orchestrator, gateway, engine, _, _, store = build_orchestrator(
+        cloud_config, content_security=security
+    )
+    await orchestrator.start()
+    try:
+        await orchestrator.handle_event(
+            make_event(text="正常弹幕", user="坏昵称", message_id="m1")
+        )
+        state = await store.get_room("room-a")
+        assert security.calls == 1
+        assert state.stats["dropped"] == 1
+        assert gateway.sent == []
+        assert engine.calls == 0, "未通过内容安全的内容不应进入模型/TTS"
+    finally:
+        await orchestrator.shutdown()
+
+
+async def test_content_security_unavailable_is_fail_closed_by_default(
+    cloud_config: CloudConfig,
+) -> None:
+    cloud_config.auto_reply = True
+    security = FakeContentSecurity(
+        ContentSecurityVerdict(False, status="unavailable", reason="down")
+    )
+    orchestrator, gateway, _, _, _, store = build_orchestrator(
+        cloud_config, content_security=security
+    )
+    await orchestrator.start()
+    try:
+        await orchestrator.handle_event(make_event(text="弹幕", message_id="m1"))
+        state = await store.get_room("room-a")
+        assert state.stats["dropped"] == 1
+        assert gateway.sent == []
+    finally:
+        await orchestrator.shutdown()
+
+
+async def test_content_security_unavailable_can_fail_open_without_tts(
+    cloud_config: CloudConfig,
+) -> None:
+    cloud_config.auto_reply = True
+    cloud_config.douyin.content_security_fail_closed = False
+    security = FakeContentSecurity(
+        ContentSecurityVerdict(False, status="unavailable", reason="down")
+    )
+    orchestrator, gateway, _, _, _, _ = build_orchestrator(
+        cloud_config, content_security=security
+    )
+    await orchestrator.start()
+    try:
+        await orchestrator.handle_event(make_event(text="弹幕", message_id="m1"))
+        assert len(gateway.sent) == 1
+        assert gateway.sent[0].read_aloud is False, "检测不可用时也不能转语音"
+    finally:
+        await orchestrator.shutdown()
+
+
+async def test_manual_reply_rejects_unsafe_content(cloud_config: CloudConfig) -> None:
+    cloud_config.auto_reply = False
+    orchestrator, gateway, _, _, _, _ = build_orchestrator(cloud_config)
+    await orchestrator.start()
+    try:
+        await orchestrator.handle_event(make_event(text="正常弹幕", message_id="m1"))
+        orchestrator.content_security = FakeContentSecurity(
+            ContentSecurityVerdict(
+                False, status="unsafe", unsafe_fields=("comment",), reason="bad"
+            )
+        )
+        with pytest.raises(ValueError):
+            await orchestrator.reply_to("room-a")
         assert gateway.sent == []
     finally:
         await orchestrator.shutdown()

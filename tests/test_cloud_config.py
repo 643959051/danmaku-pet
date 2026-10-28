@@ -32,7 +32,14 @@ def load(monkeypatch: pytest.MonkeyPatch, **overrides) -> CloudConfig:
         "STATE_BACKEND": "memory",
         "ALLOW_EPHEMERAL_STATE": "true",
         "REDIS_URL": "",
+        "DB_REDIS_ADDRESS": "",
+        "DB_REDIS_ACCOUNT": "",
+        "DB_REDIS_PASSWORD": "",
+        "DB_REDIS_PORT": "",
+        "DB_REDIS_DB": "",
+        "DB_REDIS_TLS": "",
         "ALLOW_MOCK_GATEWAY": "true",
+        "DOUYIN_CONTENT_SECURITY_ENABLED": "false",
     }
     values.update({key: str(value) for key, value in overrides.items()})
     for key, value in values.items():
@@ -188,6 +195,107 @@ def test_production_redis_config_is_accepted_without_connecting(
     assert status["state_backend"] == "redis"
     assert status["redis_configured"] is True
     assert "redis://127.0.0.1" not in str(status)
+
+
+def test_content_security_requires_platform_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load(
+            monkeypatch,
+            APP_ENV="prod",
+            DOUYIN_VERIFY_MODE="hmac",
+            DOUYIN_CONTENT_SECURITY_ENABLED="true",
+            DOUYIN_APP_ID="",
+            DOUYIN_APP_SECRET="",
+        )
+    assert "DOUYIN_APP_ID" in str(exc.value)
+
+
+def test_content_security_config_is_visible_without_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load(
+        monkeypatch,
+        APP_ENV="prod",
+        DOUYIN_VERIFY_MODE="hmac",
+        DOUYIN_CONTENT_SECURITY_ENABLED="true",
+        DOUYIN_APP_ID="tt-test",
+        DOUYIN_APP_SECRET="secret-value",
+    )
+    assert config.douyin.content_security_enabled is True
+    status = config.public_status()
+    assert status["content_security_enabled"] is True
+    assert "secret-value" not in str(status)
+
+
+def test_platform_injected_db_redis_variables_build_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load(
+        monkeypatch,
+        APP_ENV="prod",
+        DOUYIN_VERIFY_MODE="hmac",
+        STATE_BACKEND="redis",
+        REDIS_URL="",
+        DB_REDIS_ADDRESS="10.1.1.123/3306",
+        DB_REDIS_ACCOUNT="default",
+        DB_REDIS_PASSWORD="p@ss/wd",
+    )
+    assert config.state_backend == "redis"
+    assert config.redis_url == "redis://:p%40ss%2Fwd@10.1.1.123:3306/0"
+    status = config.public_status()
+    assert status["redis_configured"] is True
+    assert "p@ss" not in str(status)
+
+
+def test_platform_redis_account_and_tls_are_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load(
+        monkeypatch,
+        APP_ENV="prod",
+        DOUYIN_VERIFY_MODE="hmac",
+        STATE_BACKEND="redis",
+        REDIS_URL="",
+        DB_REDIS_ADDRESS="redis.internal:6380",
+        DB_REDIS_ACCOUNT="danmaku",
+        DB_REDIS_PASSWORD="secret",
+        DB_REDIS_DB="2",
+        DB_REDIS_TLS="true",
+    )
+    assert config.redis_url == "rediss://danmaku:secret@redis.internal:6380/2"
+
+
+def test_explicit_redis_url_wins_over_platform_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load(
+        monkeypatch,
+        APP_ENV="prod",
+        DOUYIN_VERIFY_MODE="hmac",
+        STATE_BACKEND="redis",
+        REDIS_URL="redis://explicit.example:6379/1",
+        DB_REDIS_ADDRESS="10.1.1.123/3306",
+        DB_REDIS_ACCOUNT="default",
+        DB_REDIS_PASSWORD="injected",
+    )
+    assert config.redis_url == "redis://explicit.example:6379/1"
+
+
+def test_redis_state_without_url_or_platform_variables_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load(
+            monkeypatch,
+            APP_ENV="prod",
+            DOUYIN_VERIFY_MODE="hmac",
+            STATE_BACKEND="redis",
+            REDIS_URL="",
+            DB_REDIS_ADDRESS="",
+        )
+    assert "DB_REDIS_ADDRESS" in str(exc.value)
 
 
 def test_viewer_data_is_hidden_from_logs_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

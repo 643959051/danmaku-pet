@@ -65,10 +65,11 @@ danmaku_pet/
 ├─ douyin/                 官方平台接入
 │  ├─ openapi.py           可配置路径的 HTTP 客户端（超时/重试/错误分类）
 │  ├─ verifier.py          header / HMAC 校验
-│  ├─ tasks.py             评论、礼物任务启动/停止/重试
-│  ├─ receiver.py          推送接收：校验 → 解析 → 去重 → 派发
+│  ├─ tasks.py             评论、礼物任务启动/停止（无后台重试）
+│  ├─ receiver.py          推送接收：校验 → 解析 → 派发（去重走 StateStore）
 │  ├─ adapter.py           官方字段 → Event
-│  └─ dedup.py             message_id / 受控复合去重
+│  ├─ dedup.py             message_id / 受控复合去重
+│  └─ content_security.py  getAccessToken + 弹幕/昵称内容安全
 ├─ decision/               模型决策与礼物剧本（云端）
 ├─ execution/              本地 TTS、动作映射、dafeiyu、执行后端
 ├─ web/
@@ -119,15 +120,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_cloud.ps1
 - 存活性探针：`http://127.0.0.1:8000/v1/ping`
 - 详细健康检查：`http://127.0.0.1:8000/api/health`
 - 模拟评论/礼物：管理端「模拟互动」或 `scripts/smoke_test.py`
-- 状态存储：dev 默认 `STATE_BACKEND=memory`；要验证平台要求的无状态链路，启动一个 Redis 并设置
-  `STATE_BACKEND=redis` + `REDIS_URL=redis://127.0.0.1:6379/0`。prod 强制 Redis，详见
-  [抖音云规范对照](docs/抖音云规范对照.md)。
+- 状态存储：dev 默认 `STATE_BACKEND=memory`；prod 可直接使用抖音云注入的
+  `DB_REDIS_ADDRESS` / `DB_REDIS_ACCOUNT` / `DB_REDIS_PASSWORD`，也可显式设置
+  `REDIS_URL`（显式值优先）。详见 [抖音云规范对照](docs/抖音云规范对照.md)。
 
 本地云端配置写在 `.env.cloud`（已 gitignore），不会和客户端 `.env` 混用：
 
 ```powershell
 Copy-Item .\deploy\cloud.env.example .\.env.cloud
-notepad .\.env.cloud   # 本地开发记得把 STATE_BACKEND 改成 memory，或先启动 Redis 并用 redis
+notepad .\.env.cloud   # 本地开发记得改 STATE_BACKEND=memory，并把 DOUYIN_CONTENT_SECURITY_ENABLED 设为 false
+# 或者填好 DOUYIN_APP_ID / DOUYIN_APP_SECRET 后保留内容安全检测
 ```
 
 ### 2.3 本地跑客户端
@@ -270,9 +272,13 @@ PerformResult:  command_id, room_id, status, speech_ms,
 
 ### 4.1 内容安全
 
-- 评论：去控制符/零宽字符、长度上限、敏感词拦截、提示词注入标记（标记后仍按普通数据交给模型）。
-- 回复：去掉 HTML 标记、敏感词命中替换为安全兜底话术、硬长度上限。
-- 管理端可看到 `replies_sanitized`、`comments_flagged` 计数。
+- 评论/昵称：先做本地清洗、长度/敏感词/提示词注入检查，再调用抖音小程序
+  `POST /api/v2/tags/text/antidirt`（`X-Token` 为 `getAccessToken` 获取的 access_token）同时检测弹幕和昵称；
+- 任一字段 `hit=true`：整个事件在进入模型/TTS **之前丢弃**，所以恶意谐音昵称也不会被念出来；
+- 检测接口不可用：默认 fail-closed 丢弃；显式配置 fail-open 时允许生成文本回复，但强制 `read_aloud=false`，仍不转语音；
+- access_token 缓存在 Redis，避免多实例重复获取导致旧 token 提前失效；
+- 回复：去掉 HTML 标记、敏感词命中替换为安全兜底话术、硬长度上限；
+- 管理端可看到 `replies_sanitized`、`comments_flagged`、`content_security_blocked` 计数。
 
 ### 4.2 监控
 
@@ -413,7 +419,7 @@ $env:TEMP = (Join-Path (Get-Location) "temp\pytest-temp")
 .\.conda\env\python.exe -m pytest -q
 ```
 
-当前：**277 项通过**。覆盖：
+当前：**293 项通过**。覆盖：
 
 - 协议序列化、字段校验、版本不兼容、command_id 稳定性、DedupCache TTL；
 - 房间隔离、评论走模型、礼物绕过模型并抢占、单房间单动作、重复消息、过期、暂停、内容安全；
@@ -440,7 +446,7 @@ $env:TEMP = (Join-Path (Get-Location) "temp\pytest-temp")
 | 5 官方数据 | `douyin/`、`tests/test_douyin_*.py` |
 | 6 客户端 | `client/`、`packaging/`、`web/client/` |
 | 7 安全治理 | `content_safety.py`、`auth.py`、`metrics.py`、暂停/一键停止 |
-| 8 测试 | `tests/` 277 项、`scripts/smoke_test.py`、`scripts/make_mock_commands.py` |
+| 8 测试 | `tests/` 293 项、`scripts/smoke_test.py`、`scripts/make_mock_commands.py` |
 
 仍未完成/需平台确认：抖音云网关客户端通道（`--transport platform` 显式报错）、真实接口路径与字段、
 礼物 ID 表、真实直播间联调。详见 [改造对照表](docs/改造对照表.md)。

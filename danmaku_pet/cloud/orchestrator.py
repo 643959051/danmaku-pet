@@ -53,6 +53,7 @@ class CloudOrchestrator:
         guard: ContentGuard,
         metrics: StageMetrics,
         store: StateStore,
+        content_security: Any | None = None,
     ) -> None:
         self.config = config
         self.broadcaster = broadcaster
@@ -62,6 +63,7 @@ class CloudOrchestrator:
         self.guard = guard
         self.metrics = metrics
         self.store = store
+        self.content_security = content_security
         self.started_at = time.time()
         self._started = False
         self._closing = False
@@ -105,6 +107,44 @@ class CloudOrchestrator:
                 except Exception:
                     logger.warning("关闭旧决策引擎失败", exc_info=True)
 
+    async def _screen_content(
+        self, text: str, user: str
+    ) -> tuple[bool, str, bool]:
+        """Platform text/name safety.
+
+        Returns ``(allowed, reason, suppress_speech)``.  An unsafe result drops
+        the whole event (so it can never reach TTS); an unavailable API is
+        fail-closed by default, while fail-open still suppresses TTS.
+        """
+
+        if self.content_security is None:
+            return True, "", False
+        try:
+            verdict = await self.content_security.check(text, user=user)
+        except Exception as exc:  # noqa: BLE001 - safety path must not 500
+            logger.warning("平台内容安全检测异常: %s", exc)
+            verdict = None
+        if verdict is None or getattr(verdict, "status", "") == "unavailable":
+            if bool(
+                getattr(self.config.douyin, "content_security_fail_closed", True)
+            ):
+                return False, "内容安全服务暂不可用，已保守丢弃该事件", True
+            return True, "", True
+        if getattr(verdict, "status", "") == "unsafe":
+            fields = set(getattr(verdict, "unsafe_fields", ()) or ())
+            labels = []
+            if "user" in fields:
+                labels.append("昵称")
+            if "comment" in fields:
+                labels.append("弹幕")
+            suffix = "、".join(labels) or "内容"
+            return (
+                False,
+                f"{suffix}未通过平台内容安全检测（谐音/变体也会命中），已丢弃",
+                True,
+            )
+        return True, "", False
+
     # ------------------------------------------------------------------ ingress
     async def handle_event(self, event: Event) -> RoomState:
         if self._closing:
@@ -128,29 +168,55 @@ class CloudOrchestrator:
                 return state
 
             state.stats["received"] += 1
+            name_guard = self.guard.check_name(event.user)
+            if not name_guard.allowed:
+                await self._drop(
+                    state, event, f"昵称未通过本地安全检查（{name_guard.reason}）"
+                )
+                await self.store.save_room(state)
+                return state
+            if name_guard.text != event.user:
+                event = replace(event, user=name_guard.text)
+
+            comment_guard = None
             if not event.is_gift:
-                guard = self.guard.check_comment(event.text)
-                if not guard.allowed:
+                comment_guard = self.guard.check_comment(event.text)
+                if not comment_guard.allowed:
                     await self._drop(
-                        state, event, f"评论内容未通过安全检查（{guard.reason}）"
+                        state,
+                        event,
+                        f"评论内容未通过安全检查（{comment_guard.reason}）",
                     )
                     await self.store.save_room(state)
                     return state
-                if guard.text != event.text:
-                    event = replace(event, text=guard.text)
-                if guard.flagged:
+                if comment_guard.text != event.text:
+                    event = replace(event, text=comment_guard.text)
+
+            allowed, reason, suppress_speech = await self._screen_content(
+                event.text, event.user
+            )
+            if not allowed:
+                self.metrics.inc("content_security_blocked")
+                await self._drop(state, event, reason)
+                await self.store.save_room(state)
+                return state
+
+            if not event.is_gift:
+                state.last_danmaku = event.to_dict()
+                if comment_guard is not None and comment_guard.flagged:
                     self.metrics.inc("comments_flagged")
                     await self._notify(
                         room_id,
                         "warning",
                         f"评论疑似提示词注入，已按普通弹幕处理：{event.text[:30]}",
                     )
-                state.last_danmaku = event.to_dict()
 
             if event.is_gift:
                 await self._process(state, event, read_aloud=False)
             elif state.auto_reply:
-                await self._process(state, event, read_aloud=True)
+                await self._process(
+                    state, event, read_aloud=not suppress_speech
+                )
             else:
                 state.add_pending(event.to_dict())
                 await self.broadcaster.send(
@@ -195,6 +261,15 @@ class CloudOrchestrator:
             final_user = (user or (source.get("user", "") if source else "观众")).strip() or "观众"
             if not final_text:
                 raise LookupError("没有可回复的弹幕")
+            name_guard = self.guard.check_name(final_user)
+            if not name_guard.allowed:
+                raise ValueError("昵称未通过安全检查，已拒绝转为语音")
+            final_user = name_guard.text
+            allowed, reason, suppress_speech = await self._screen_content(
+                final_text, final_user
+            )
+            if not allowed:
+                raise ValueError(reason or "内容未通过平台内容安全检测")
             if source is not None:
                 state.remove_pending(str(source.get("event_id") or ""))
             event = Event(
@@ -207,7 +282,9 @@ class CloudOrchestrator:
             )
             state.last_event_at = time.time()
             state.stats["received"] += 1
-            await self._process(state, event, read_aloud=state.auto_reply)
+            await self._process(
+                state, event, read_aloud=state.auto_reply and not suppress_speech
+            )
             await self.store.save_room(state)
             await self._broadcast_status(state)
             return event

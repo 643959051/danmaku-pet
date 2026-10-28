@@ -29,6 +29,7 @@ from danmaku_pet.shared.protocol import DedupCache
 ROOM_PREFIX = "dmp:room:"
 LOCK_PREFIX = "dmp:lock:"
 DEDUP_PREFIX = "dmp:dedup:"
+CACHE_PREFIX = "dmp:cache:"
 PERSONA_KEY = "dmp:persona"
 
 MAX_PENDING = 30
@@ -256,6 +257,8 @@ class StateStore(Protocol):
     async def delete_room(self, room_id: str) -> None: ...
     async def list_rooms(self) -> list[RoomState]: ...
     async def dedup(self, key: str, ttl_s: float) -> bool: ...
+    async def cache_get(self, key: str) -> Any | None: ...
+    async def cache_set(self, key: str, value: Any, ttl_s: float) -> None: ...
     async def load_persona(self) -> dict[str, Any] | None: ...
     async def save_persona(self, persona: dict[str, Any]) -> None: ...
     def lock(self, room_id: str) -> Any: ...
@@ -274,6 +277,7 @@ class MemoryStateStore:
         self._locks: dict[str, asyncio.Lock] = {}
         self._dedup = DedupCache(ttl_s=3600, maxsize=20_000)
         self._persona: dict[str, Any] | None = None
+        self._cache: dict[str, tuple[float, Any]] = {}
         self._closed = False
 
     async def start(self) -> None:
@@ -283,6 +287,7 @@ class MemoryStateStore:
         self._closed = True
         self._rooms.clear()
         self._locks.clear()
+        self._cache.clear()
 
     async def ping(self) -> bool:
         return not self._closed
@@ -317,6 +322,19 @@ class MemoryStateStore:
     async def dedup(self, key: str, ttl_s: float) -> bool:
         # The memory cache has its own TTL; ttl_s is kept for API parity.
         return self._dedup.check_and_add(key)
+
+    async def cache_get(self, key: str) -> Any | None:
+        item = self._cache.get(key)
+        if item is None:
+            return None
+        expires_at, value = item
+        if expires_at <= time.time():
+            self._cache.pop(key, None)
+            return None
+        return value
+
+    async def cache_set(self, key: str, value: Any, ttl_s: float) -> None:
+        self._cache[key] = (time.time() + max(1.0, float(ttl_s)), value)
 
     async def load_persona(self) -> dict[str, Any] | None:
         return dict(self._persona) if self._persona else None
@@ -427,6 +445,24 @@ class RedisStateStore:
             f"{DEDUP_PREFIX}{key}", "1", nx=True, ex=max(1, int(ttl_s))
         )
         return bool(result)
+
+    async def cache_get(self, key: str) -> Any | None:
+        assert self._client is not None
+        raw = await self._client.get(f"{CACHE_PREFIX}{key}")
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+
+    async def cache_set(self, key: str, value: Any, ttl_s: float) -> None:
+        assert self._client is not None
+        await self._client.setex(
+            f"{CACHE_PREFIX}{key}",
+            max(1, int(ttl_s)),
+            json.dumps(value, ensure_ascii=False),
+        )
 
     async def load_persona(self) -> dict[str, Any] | None:
         assert self._client is not None

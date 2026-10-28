@@ -15,6 +15,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
@@ -59,6 +60,75 @@ def _env_float(name: str, default: float) -> float:
 
 def _env_text(name: str, default: str = "") -> str:
     return (os.getenv(name) or default).strip()
+
+
+def _redis_host_port(address: str, default_port: int = 6379) -> tuple[str, int]:
+    """Parse ``10.1.1.123/3306``, ``host:6379`` or ``[::1]:6379``."""
+
+    raw = (address or "").strip()
+    if not raw:
+        return "", default_port
+    if "://" in raw:
+        parts = urlsplit(raw)
+        return parts.hostname or "", parts.port or default_port
+    if raw.startswith("["):
+        closing = raw.find("]")
+        if closing > 0:
+            host = raw[1:closing]
+            tail = raw[closing + 1 :].lstrip(":")
+            if tail.isdigit():
+                return host, int(tail)
+            return host, default_port
+    if "/" in raw:
+        host, _, tail = raw.rpartition("/")
+        if host and tail.isdigit():
+            return host, int(tail)
+    if ":" in raw:
+        host, _, tail = raw.rpartition(":")
+        if host and tail.isdigit():
+            return host, int(tail)
+    return raw, default_port
+
+
+def _redis_url_from_platform_env() -> str:
+    """Build REDIS_URL from 抖音云's injected DB_REDIS_* variables.
+
+    The platform injects ``DB_REDIS_ADDRESS`` (e.g. ``10.1.1.123/3306``),
+    ``DB_REDIS_ACCOUNT`` and ``DB_REDIS_PASSWORD``.  An explicit REDIS_URL
+    always wins so operators can still override it for a local tunnel.
+    """
+
+    explicit = _env_text("REDIS_URL")
+    if explicit:
+        return explicit
+
+    address = _env_text("DB_REDIS_ADDRESS")
+    if not address:
+        return ""
+    if address.startswith(("redis://", "rediss://")):
+        return address
+
+    default_port = _env_int("DB_REDIS_PORT", 6379)
+    host, port = _redis_host_port(address, default_port)
+    if not host:
+        return ""
+    account = _env_text("DB_REDIS_ACCOUNT")
+    password = _env_text("DB_REDIS_PASSWORD")
+    database = max(0, _env_int("DB_REDIS_DB", 0))
+    scheme = "rediss" if _env_bool("DB_REDIS_TLS", False) else "redis"
+
+    # Redis 6's default ACL user still supports the classic password-only AUTH;
+    # omitting ``default:`` also keeps the URL usable with Redis 5.
+    auth = ""
+    if password:
+        if account and account.lower() != "default":
+            auth = f"{quote(account, safe='')}:{quote(password, safe='')}@"
+        else:
+            auth = f":{quote(password, safe='')}@"
+    elif account and account.lower() != "default":
+        auth = f"{quote(account, safe='')}@"
+    host_part = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"{scheme}://{auth}{host_part}:{int(port)}/{database}"
 
 
 def _parse_gift_ids(raw: str) -> dict[str, str]:
@@ -111,6 +181,9 @@ class DouyinSettings:
     task_status_path: str = ""
     command_push_path: str = ""
     interrupt_path: str = ""
+    content_security_enabled: bool = True
+    content_security_base_url: str = "https://developer.toutiao.com"
+    content_security_fail_closed: bool = True
 
     @classmethod
     def from_env(cls) -> "DouyinSettings":
@@ -119,6 +192,7 @@ class DouyinSettings:
             raise ConfigError(
                 f"DOUYIN_VERIFY_MODE 必须是 {'/'.join(VALID_VERIFY_MODES)}，收到 {mode!r}"
             )
+        is_dev = _env_text("APP_ENV", "prod").lower() == "dev"
         return cls(
             base_url=_env_text("DOUYIN_OPENAPI_BASE_URL").rstrip("/"),
             app_id=_env_text("DOUYIN_APP_ID"),
@@ -142,6 +216,15 @@ class DouyinSettings:
             task_status_path=_env_text("DOUYIN_TASK_STATUS_PATH"),
             command_push_path=_env_text("DOUYIN_COMMAND_PUSH_PATH"),
             interrupt_path=_env_text("DOUYIN_COMMAND_INTERRUPT_PATH"),
+            content_security_enabled=_env_bool(
+                "DOUYIN_CONTENT_SECURITY_ENABLED", not is_dev
+            ),
+            content_security_base_url=_env_text(
+                "DOUYIN_CONTENT_SECURITY_BASE_URL", "https://developer.toutiao.com"
+            ).rstrip("/"),
+            content_security_fail_closed=_env_bool(
+                "DOUYIN_CONTENT_SECURITY_FAIL_CLOSED", True
+            ),
         )
 
     @property
@@ -263,17 +346,25 @@ class CloudConfig:
                 "GATEWAY_MODE=douyin_cloud 需要 DOUYIN_OPENAPI_BASE_URL；"
                 "平台能力确认前请使用 GATEWAY_MODE=wss 或 mock"
             )
+        if douyin.content_security_enabled and not (
+            douyin.app_id and douyin.app_secret
+        ):
+            raise ConfigError(
+                "开启 DOUYIN_CONTENT_SECURITY_ENABLED 需要 DOUYIN_APP_ID 和 "
+                "DOUYIN_APP_SECRET（用于 getAccessToken + 文本内容安全检测）"
+            )
 
         state_backend = _env_text("STATE_BACKEND", "memory" if is_dev else "redis").lower()
         if state_backend not in VALID_STATE_BACKENDS:
             raise ConfigError(
                 f"STATE_BACKEND 必须是 {'/'.join(VALID_STATE_BACKENDS)}，收到 {state_backend!r}"
             )
-        redis_url = _env_text("REDIS_URL")
+        redis_url = _redis_url_from_platform_env()
         ephemeral_allowed = _env_bool("ALLOW_EPHEMERAL_STATE", False)
         if state_backend == "redis" and not redis_url:
             raise ConfigError(
-                "STATE_BACKEND=redis 需要 REDIS_URL；正式环境必须把房间状态放在远端 Redis"
+                "STATE_BACKEND=redis 需要 REDIS_URL，或抖音云注入的 "
+                "DB_REDIS_ADDRESS / DB_REDIS_ACCOUNT / DB_REDIS_PASSWORD"
             )
         if not is_dev and state_backend == "memory" and not ephemeral_allowed:
             raise ConfigError(
@@ -421,6 +512,8 @@ class CloudConfig:
             "state_backend": self.state_backend,
             "redis_configured": bool(self.redis_url),
             "ephemeral_state_allowed": self.ephemeral_state_allowed,
+            "content_security_enabled": self.douyin.content_security_enabled,
+            "content_security_fail_closed": self.douyin.content_security_fail_closed,
             "display_timezone": self.display_timezone,
             "llm_mode": self.effective_llm_mode,
             "llm_requested_mode": self.llm_mode,

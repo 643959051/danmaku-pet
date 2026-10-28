@@ -34,6 +34,7 @@ from danmaku_pet.decision.gifts import gift_table
 from danmaku_pet.decision.llm import MockDecisionEngine, build_engine
 from danmaku_pet.decision.prompts import build_system_prompt
 from danmaku_pet.douyin.adapter import DouyinEventAdapter
+from danmaku_pet.douyin.content_security import DouyinContentSecurity
 from danmaku_pet.douyin.openapi import DouyinOpenAPI
 from danmaku_pet.douyin.receiver import DouyinReceiver
 from danmaku_pet.douyin.tasks import InteractionTaskManager
@@ -152,6 +153,11 @@ def create_app(
         openapi = DouyinOpenAPI(config.douyin)
 
     store = create_state_store(config)
+    content_security = (
+        DouyinContentSecurity(config.douyin, cache=store)
+        if config.douyin.content_security_enabled
+        else None
+    )
     gateway = GatewayManager(
         mode=config.gateway_mode,
         broadcaster=broadcaster,
@@ -169,6 +175,7 @@ def create_app(
         guard=guard,
         metrics=metrics,
         store=store,
+        content_security=content_security,
     )
     gateway.set_result_handler(orchestrator.handle_result)
 
@@ -207,6 +214,8 @@ def create_app(
             if tasks is not None:
                 await tasks.shutdown()
             await orchestrator.shutdown()
+            if content_security is not None:
+                await content_security.close()
             if openapi is not None:
                 await openapi.close()
             logger.info("云端服务已关闭")
@@ -224,6 +233,7 @@ def create_app(
     app.state.metrics = metrics
     app.state.sessions = sessions
     app.state.store = store
+    app.state.content_security = content_security
     app.state.auth = auth
     app.state.engine = engine
     app.state.gateway = gateway
@@ -266,6 +276,9 @@ def create_app(
             "config": config.public_status(),
             "startup_warning": app.state.startup_warning,
             "orchestrator": await orchestrator.snapshot(),
+            "content_security": (
+                content_security.status() if content_security is not None else {"enabled": False}
+            ),
             "receiver": receiver.status(),
             "douyin_tasks": tasks.snapshot() if tasks is not None else [],
             "simulator": simulator.status(),
@@ -305,6 +318,7 @@ def create_app(
             "environment": config.environment,
             "gateway_mode": config.gateway_mode,
             "state_backend": config.state_backend,
+            "content_security": bool(content_security is not None),
             "version": __version__,
             "protocol_version": PROTOCOL_VERSION,
             "rooms": await orchestrator.room_count(),
@@ -373,6 +387,8 @@ def create_app(
                 user=payload.user,
             )
         except LookupError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="房间不存在") from exc

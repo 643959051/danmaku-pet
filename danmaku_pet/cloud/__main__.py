@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app(config)
     base = f"http://{config.host}:{config.port}"
     print(f"\n  弹幕宠物云端后端  ->  {base}/", flush=True)
-    print(f"  环境={config.environment}  网关={config.gateway_mode}  LLM={config.effective_llm_mode}  状态={config.state_backend}", flush=True)
+    print(f"  环境={config.environment}  网关={config.gateway_mode}  LLM={config.effective_llm_mode}  状态={config.state_backend}  内容安全={'on' if config.douyin.content_security_enabled else 'off'}", flush=True)
     if config.environment == "prod" and config.gateway_mode == "mock":
         print("  [警告] 正式环境使用 mock 网关：指令不会到达任何开播电脑。", flush=True)
     if config.environment == "prod" and config.effective_llm_mode == "mock":
