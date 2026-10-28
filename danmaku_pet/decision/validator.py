@@ -6,7 +6,8 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
-from danmaku_pet.models import EMOTIONS, MOTIONS, ActionPlan, Event
+from danmaku_pet.shared.events import Event
+from danmaku_pet.shared.plans import EMOTIONS, MOTIONS, ActionPlan
 
 FALLBACK_REPLY = "我在呢，刚才没听清，再说一遍好吗？"
 

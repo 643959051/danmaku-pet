@@ -11,6 +11,7 @@ from danmaku_pet.decision.llm import (
     DeepSeekEngine,
     DecisionError,
     MockDecisionEngine,
+    local_now,
     parse_json_object,
 )
 from danmaku_pet.models import Event
@@ -95,6 +96,28 @@ async def test_deepseek_http_error_raises_decision_error() -> None:
     await engine.close()
 
 
+@pytest.mark.asyncio
+async def test_deepseek_timeout_raises_decision_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow model", request=request)
+
+    engine = DeepSeekEngine(make_config(), http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(DecisionError):
+        await engine.decide(make_event(), ConversationMemory(10))
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_deepseek_invalid_json_raises_decision_error() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]})
+
+    engine = DeepSeekEngine(make_config(), http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(DecisionError):
+        await engine.decide(make_event(), ConversationMemory(10))
+    await engine.close()
+
+
 def test_parse_json_rejects_markdown_without_object() -> None:
     with pytest.raises(DecisionError):
         parse_json_object("not json")
@@ -118,3 +141,10 @@ async def test_mock_engine_answers_time_questions() -> None:
     assert "周" in result.plan.reply
     assert result.plan.motion == "nod"
     assert result.source == "mock"
+
+
+def test_local_now_uses_the_configured_timezone() -> None:
+    assert local_now("UTC").utcoffset().total_seconds() == 0
+    assert local_now("Asia/Shanghai").utcoffset().total_seconds() == 8 * 3600
+    # Unknown names fall back to the process timezone instead of crashing.
+    assert local_now("Mars/Olympus").tzinfo is not None

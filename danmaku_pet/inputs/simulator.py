@@ -1,4 +1,4 @@
-"""Local simulated danmaku loop (no Douyin connection in the MVP)."""
+"""Local simulated danmaku/gift loop (雲端开发与联调用)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from danmaku_pet.models import Event
 
 logger = logging.getLogger(__name__)
 
-Submit = Callable[[Event], Awaitable[None]]
+Submit = Callable[[Event], Awaitable[Any]]
 
 CHAT_LINES: tuple[str, ...] = (
     "小鱼今天怎么这么可爱",
@@ -30,23 +30,26 @@ CHAT_LINES: tuple[str, ...] = (
 
 USERS: tuple[str, ...] = ("小满", "阿星", "橘子汽水", "夜航船", "momo", "不吃香菜")
 
-GIFTS: tuple[tuple[str, int], ...] = (
-    ("小心心", 1),
-    ("玫瑰", 3),
-    ("棒棒糖", 2),
-    ("啤酒", 1),
-    ("墨镜", 1),
-    ("跑车", 1),
-    ("火箭", 1),
-    ("嘉年华", 1),
+# (gift name, gift id, count) — ids are placeholders until the platform sample
+# is confirmed; the name path keeps working in the meantime.
+GIFTS: tuple[tuple[str, str, int], ...] = (
+    ("小心心", "gift-heart", 1),
+    ("玫瑰", "gift-rose", 3),
+    ("棒棒糖", "gift-lollipop", 2),
+    ("啤酒", "gift-beer", 1),
+    ("墨镜", "gift-glasses", 1),
+    ("跑车", "gift-car", 1),
+    ("火箭", "gift-rocket", 1),
+    ("嘉年华", "gift-carnival", 1),
 )
 
 SCENARIOS = ("mixed", "chat", "gift")
 
 
 class Simulator:
-    def __init__(self, submit: Submit) -> None:
+    def __init__(self, submit: Submit, *, room_id: str = "") -> None:
         self._submit = submit
+        self.room_id = room_id
         self._task: asyncio.Task[None] | None = None
         self.interval = 4.0
         self.scenario = "mixed"
@@ -58,15 +61,28 @@ class Simulator:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start(self, interval_seconds: float, scenario: str = "mixed") -> None:
+    async def start(
+        self,
+        interval_seconds: float,
+        scenario: str = "mixed",
+        *,
+        room_id: str | None = None,
+    ) -> None:
         await self.stop()
         self.interval = max(0.8, min(60.0, float(interval_seconds)))
         self.scenario = scenario if scenario in SCENARIOS else "mixed"
+        if room_id is not None:
+            self.room_id = room_id
         self.started_at = time.time()
         self.sent = 0
         self._counter = 0
         self._task = asyncio.create_task(self._run(), name="danmaku-simulator")
-        logger.info("模拟弹幕循环启动: interval=%.1fs scenario=%s", self.interval, self.scenario)
+        logger.info(
+            "模拟循环启动: room=%s interval=%.1fs scenario=%s",
+            self.room_id or "*",
+            self.interval,
+            self.scenario,
+        )
 
     async def stop(self) -> None:
         task = self._task
@@ -86,19 +102,22 @@ class Simulator:
         )
         user = random.choice(USERS)
         if make_gift:
-            gift, count = random.choice(GIFTS)
+            gift, gift_id, count = random.choice(GIFTS)
             return Event(
                 source="gift_sim",
                 user=user,
                 text=f"送出 {gift}" + (f" × {count}" if count > 1 else ""),
                 gift_name=gift,
+                gift_id=gift_id,
                 gift_count=count,
+                room_id=self.room_id,
                 timestamp=time.time(),
             )
         return Event(
             source="danmaku_sim",
             user=user,
             text=random.choice(CHAT_LINES),
+            room_id=self.room_id,
             timestamp=time.time(),
         )
 
@@ -122,6 +141,7 @@ class Simulator:
     def status(self) -> dict[str, Any]:
         return {
             "running": self.running,
+            "room_id": self.room_id,
             "interval_seconds": self.interval,
             "scenario": self.scenario,
             "sent": self.sent,

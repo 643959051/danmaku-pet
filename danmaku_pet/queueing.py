@@ -23,9 +23,18 @@ class DropInfo:
 
 
 class EventQueue:
-    def __init__(self, *, maxsize: int = 50, stale_after_s: float = 3.0) -> None:
+    """One instance per room: the queue itself is a room-isolation boundary."""
+
+    def __init__(
+        self,
+        *,
+        maxsize: int = 50,
+        stale_after_s: float = 3.0,
+        room_id: str = "",
+    ) -> None:
         self.maxsize = maxsize
         self.stale_after_s = stale_after_s
+        self.room_id = room_id
         self._items: deque[QueuedEvent] = deque()
         self._condition = asyncio.Condition()
         self._dropped_total = 0
@@ -47,6 +56,10 @@ class EventQueue:
     ) -> list[DropInfo]:
         """Put an event; high-priority gifts may clear the normal backlog."""
 
+        if self.room_id and event.room_id and event.room_id != self.room_id:
+            raise ValueError(
+                f"room mismatch: queue={self.room_id!r} event={event.room_id!r}"
+            )
         queued = QueuedEvent(event=event, read_aloud=read_aloud)
         dropped: list[DropInfo] = []
         async with self._condition:
@@ -103,6 +116,7 @@ class EventQueue:
 
     def snapshot(self) -> dict[str, object]:
         return {
+            "room_id": self.room_id,
             "pending": len(self._items),
             "maxsize": self.maxsize,
             "stale_after_seconds": self.stale_after_s,

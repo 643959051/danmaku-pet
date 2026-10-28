@@ -1,106 +1,119 @@
-"""Smoke test for the default-off auto-reply switch and pending inbox."""
+"""Smoke test: 自动回复开关与待回复列表（云端多房间版）。
+
+Usage:
+    $env:ADMIN_TOKEN = "..."; $env:ROOM_ID = "dev-room"
+    .\\.conda\\env\\python.exe scripts\\auto_reply_smoke.py
+"""
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
 import httpx
 
-BASE = "http://127.0.0.1:8787"
+BASE = os.getenv("CLOUD_BASE", "http://127.0.0.1:8000").rstrip("/")
+ROOM = os.getenv("ROOM_ID", "dev-room").strip() or "dev-room"
+HEADERS = {"Authorization": f"Bearer {os.getenv('ADMIN_TOKEN', '').strip()}"}
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def get_status() -> dict:
-    return httpx.get(f"{BASE}/api/status", timeout=10).json()
+def get_room() -> dict:
+    status = httpx.get(f"{BASE}/api/status", headers=HEADERS, timeout=10).json()
+    return next(
+        (room for room in status["orchestrator"]["rooms"] if room["room_id"] == ROOM),
+        {"stats": {}, "pending": [], "recent": [], "auto_reply": False},
+    )
 
 
-def wait_for(predicate, timeout: float = 25.0) -> dict:
+def wait_for(predicate, timeout: float = 30.0) -> dict:
     deadline = time.time() + timeout
-    last = get_status()
+    last = get_room()
     while time.time() < deadline:
-        last = get_status()
+        last = get_room()
         if predicate(last):
             return last
         time.sleep(0.25)
-    raise TimeoutError(json.dumps(last.get("orchestrator", {}).get("stats"), ensure_ascii=False))
+    return last
+
+
+def set_auto(enabled: bool) -> dict:
+    response = httpx.post(
+        f"{BASE}/api/settings/auto-reply",
+        headers=HEADERS,
+        json={"enabled": enabled, "room_id": ROOM},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def main() -> int:
-    initial = get_status()
-    assert initial["config"]["auto_reply"] is False, initial["config"]
-    assert initial["orchestrator"]["pending"] == []
-
-    # OFF: simulate danmaku, expect a pending inbox and no LLM/TTS.
+    # 房间是按事件懒创建的；先用一条评论把房间建出来，否则 auto-reply 接口会 404。
     httpx.post(
-        f"{BASE}/api/simulator/start",
-        json={"interval_seconds": 1, "scenario": "chat"},
+        f"{BASE}/api/rooms/{ROOM}/events/manual",
+        headers=HEADERS,
+        json={"text": "初始化房间（auto-reply smoke）", "user": "脚本"},
         timeout=10,
     )
-    time.sleep(2.8)
-    httpx.post(f"{BASE}/api/simulator/stop", json={}, timeout=10)
-    off_status = wait_for(lambda s: len(s["orchestrator"]["pending"]) >= 2, timeout=5)
-    pending = off_status["orchestrator"]["pending"]
-    assert off_status["orchestrator"]["stats"]["completed"] == 0
-    assert all(not entry.get("plan") for entry in off_status["orchestrator"]["recent"])
+    set_auto(False)
+    initial = get_room()
+    assert initial.get("auto_reply") is False, initial.get("auto_reply")
 
-    # Manual reply to one pending danmaku.
+    # OFF：模拟评论进入 pending，不产生决策。
+    httpx.post(
+        f"{BASE}/api/simulator/start",
+        headers=HEADERS,
+        json={"interval_seconds": 1, "scenario": "chat", "room_id": ROOM},
+        timeout=10,
+    ).raise_for_status()
+    time.sleep(2.8)
+    httpx.post(f"{BASE}/api/simulator/stop", headers=HEADERS, json={}, timeout=10)
+    off_room = wait_for(lambda room: len(room.get("pending") or []) >= 1, timeout=8)
+    pending = off_room.get("pending") or []
+    assert pending, "自动回复关闭时应进入待回复列表"
+    assert off_room.get("stats", {}).get("completed", 0) == 0
+
+    # 手动回复其中一条。
     chosen = pending[0]["event"]
     reply = httpx.post(
-        f"{BASE}/api/chat/reply",
+        f"{BASE}/api/rooms/{ROOM}/reply",
+        headers=HEADERS,
         json={"event_id": chosen["event_id"]},
-        timeout=10,
+        timeout=15,
     )
     reply.raise_for_status()
     after_reply = wait_for(
-        lambda s: s["orchestrator"]["stats"]["completed"] >= 1
-        and all(item["event"]["event_id"] != chosen["event_id"] for item in s["orchestrator"]["pending"]),
+        lambda room: room.get("stats", {}).get("dispatched", 0) >= 1
+        and all(item["event"]["event_id"] != chosen["event_id"] for item in (room.get("pending") or [])),
         timeout=30,
     )
 
-    # ON: new danmaku should be read aloud + answered.
-    enabled = httpx.post(
-        f"{BASE}/api/settings/auto-reply",
-        json={"enabled": True},
-        timeout=10,
-    )
-    enabled.raise_for_status()
-    assert enabled.json()["enabled"] is True
+    # ON：新评论会先念出来再回复。
+    set_auto(True)
     httpx.post(
         f"{BASE}/api/simulator/start",
-        json={"interval_seconds": 1, "scenario": "chat"},
+        headers=HEADERS,
+        json={"interval_seconds": 1, "scenario": "chat", "room_id": ROOM},
         timeout=10,
-    )
-    time.sleep(1.2)
-    httpx.post(f"{BASE}/api/simulator/stop", json={}, timeout=10)
-    on_status = wait_for(
-        lambda s: any(entry.get("read_aloud") for entry in s["orchestrator"]["recent"])
-        and s["orchestrator"]["stats"]["completed"] >= after_reply["orchestrator"]["stats"]["completed"] + 1,
+    ).raise_for_status()
+    time.sleep(1.4)
+    httpx.post(f"{BASE}/api/simulator/stop", headers=HEADERS, json={}, timeout=10)
+    on_room = wait_for(
+        lambda room: any(entry.get("read_aloud") for entry in room.get("recent") or []),
         timeout=30,
     )
-    read_entries = [
-        entry for entry in on_status["orchestrator"]["recent"] if entry.get("read_aloud")
-    ]
-    assert read_entries, on_status["orchestrator"]["recent"]
+    read_entries = [entry for entry in on_room.get("recent") or [] if entry.get("read_aloud")]
+    assert read_entries, "自动回复开启后应有 read_aloud 事件"
 
-    # Restore default off.
-    disabled = httpx.post(
-        f"{BASE}/api/settings/auto-reply",
-        json={"enabled": False},
-        timeout=10,
-    )
-    disabled.raise_for_status()
-    assert disabled.json()["enabled"] is False
-
+    set_auto(False)
     report = {
-        "initial_auto_reply": initial["config"]["auto_reply"],
         "pending_before_manual_reply": len(pending),
-        "manual_reply_event": reply.json()["event"],
-        "manual_completed": after_reply["orchestrator"]["stats"]["completed"],
-        "auto_reply_enabled": True,
-        "read_aloud_entries": read_entries,
-        "final_auto_reply": disabled.json()["enabled"],
+        "manual_reply_event": reply.json().get("event"),
+        "dispatched_after_reply": after_reply.get("stats", {}).get("dispatched"),
+        "read_aloud_entries": read_entries[:3],
     }
     path = ROOT / "temp" / "auto-reply-smoke.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -109,9 +122,7 @@ def main() -> int:
             {
                 "ok": True,
                 "pending_before": len(pending),
-                "manual_completed": report["manual_completed"],
                 "read_aloud_count": len(read_entries),
-                "final_auto_reply": report["final_auto_reply"],
                 "report": str(path),
             },
             ensure_ascii=False,

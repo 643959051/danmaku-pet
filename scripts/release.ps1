@@ -179,9 +179,9 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 
 ## 首次运行
 
-- 会在 exe 旁边生成 .env / data/ / assets/ / temp/ / .cache/
-- DeepSeek Key 在网页右上角「设置」里填写，保存到同目录 .env
-- 没有 Key 时自动使用本地模拟决策，界面会明确标注
+- 首次运行会在 exe 旁边生成 temp/、assets/、.cache/
+- 把 .env.example 复制为 .env，填 ROOM_ID / CLOUD_URL / CLIENT_TOKEN（或在启动时用参数）
+- 客户端不含 DeepSeek Key；模型调用全部在抖音云，未连接云端时状态页会显示离线
 - 从受限终端（低完整性/沙箱）启动时浏览器不会自动弹出，见 README「2.3.1」
 
 ## 说明
@@ -200,10 +200,10 @@ if ($NotesFile -and (Test-Path $NotesFile)) {
 
 ## 首次运行
 
-- 会在 exe 旁边生成 .env / data/ / assets/ / temp/ / .cache/
-- DeepSeek Key 在网页右上角「设置」里填写，保存到同目录 .env
-- 没有 Key 时自动使用本地模拟决策，界面会明确标注
-- 启动后自动用默认浏览器打开管理页面；从受限终端（低完整性/沙箱）启动时不会自动弹出，见 README「2.3.1」
+- 首次运行会在 exe 旁边生成 temp/、assets/、.cache/
+- 把 .env.example 复制为 .env，填 ROOM_ID / CLOUD_URL / CLIENT_TOKEN（或在启动时用参数）
+- 客户端不含 DeepSeek Key；模型调用全部在抖音云，未连接云端时状态页会显示离线
+- 启动后自动打开本地状态页；从受限终端（低完整性/沙箱）启动时不会自动弹出，见 README「2.3.1」
 
 ## 说明
 

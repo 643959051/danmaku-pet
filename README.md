@@ -1,727 +1,479 @@
-# 弹幕小人 MVP
+# 弹幕宠物（云端版）
 
-一个本地运行的「弹幕 / 输入驱动虚拟小人」最小闭环：手动输入或模拟弹幕进来，DeepSeek 产出结构化动作，桌面小人边说边演。
+抖音直播间 AI 弹幕助播：**云端做决策，开播电脑做表演**。
 
 ```text
-输入归一化 Event  ->  LLM 结构化决策 ActionPlan  ->  小人执行层 perform()
-manual / simulator     DeepSeek JSON / 礼物剧本         dsh-dafeiyu + EdgeTTS
+抖音开放平台
+   │  官方评论 / 礼物推送
+   ▼
+抖音云 Docker 后端（本仓库 danmaku_pet/cloud）
+   │  校验 → 去重 → 按 room_id 读外部状态 → DeepSeek / 礼物剧本
+   │  PerformCommand
+   ▼
+抖音云网关（正式） 或 自建 WSS（开发/备用）
+   │
+   ▼
+开播电脑 Windows 客户端（danmaku_pet/client，打包成 DanmakuPet.exe）
+   │  EdgeTTS → pygame + dafeiyu 小人 → PerformResult 回执
+   ▼
+直播伴侣采集小人画面和声音
 ```
 
-- Python 3.11 + FastAPI + WebSocket，网页管理端即开即用
-- DeepSeek 严格 JSON 决策，枚举校验 + 兜底；没有 Key 时明确降级为本地模拟
-- 原生桌面小人（dsh-dafeiyu）+ EdgeTTS + pygame，动作时长与语音对齐
-- 支持打包成便携版 exe（PyInstaller onedir，约 201 MB）
-- 80 项 pytest 测试
+- **云端**：接收官方互动数据、模型决策、礼物剧本、按直播间隔离、下发指令、健康检查与监控。
+- **本地**：接收指令、本地合成语音、播放声音、驱动桌面小人、打断与回执、诊断页面。
+- **密钥边界**：DeepSeek Key 和平台凭证只存在于抖音云；本地 EXE 里没有任何模型 Key，也没有填 Key 的界面。
 
-> MIT 许可。第三方依赖与角色素材的许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+> 本仓库按《弹幕宠物项目云端改造计划》完成拆分。平台类目、权限和正式网关参数仍需【人工设置】确认，
+> 详见 [平台设置清单](docs/平台设置清单.md) 与 [改造对照表](docs/改造对照表.md)。
 
-第一版不接真实抖音，用网页输入框和模拟弹幕循环代替。真实 Webcast 消息的适配边界已经单独放在 `inputs/douyin_webcast.py`，未来只改这一层。
-
-![dsh-dafeiyu 原生窗口实测](docs/screenshots/dafeiyu-action.png)
-
-> 上图是实际运行截图：自定义回复气泡、`@截图观众 · 转圈` 和动作状态都来自本项目发送给 dafeiyu helper 的协议消息。
+> **抖音云规范状态**：8000 端口、根目录 `run.sh`、`GET /v1/ping` 已对齐；房间状态/去重/人设存入
+> Redis（prod 强制），请求内完成决策与下发，不再依赖常驻后台 worker。正式环境需要 **Redis +
+> 抖音云网关**；自建 WSS 仅作单实例开发/备用。逐条证据见
+> [抖音云规范对照](docs/抖音云规范对照.md)。
 
 ---
 
-## 1. 已实现内容
+## 1. 目录结构
 
-- 统一事件：`source / user / text / gift_name / gift_count / timestamp`
-- 手动输入、模拟弹幕循环、礼物快速测试
-- 自动回复开关：默认关闭；关闭时新弹幕进入“待回复”列表，开启后先念弹幕再回复
-- 角色语气管理：角色名、身份、语气、口头禅、回复长度、emoji、补充规则
-- DeepSeek `deepseek-chat` 严格 JSON 决策
-- 枚举校验与安全回退：非法 motion -> `idle` / `nod`，非法 emotion -> `neutral`
-- 最近 10 轮上下文
-- 礼物事件绕过 LLM，直接走高优先级预设剧本
-- 3 秒过期丢弃、队列上限、礼物清空普通队列并打断当前表演
-- EdgeTTS 合成 + pygame 播放，动作时长 = `max(动作最短时长, 语音时长 + 300ms)`
-- dsh-dafeiyu 原生桌面窗口，始终置顶，复用其 16 组动画资产
-- 浏览器控制台：输入、礼物、模拟循环、事件流、JSON 查看、角色预览
-- 启动监听成功后自动打开默认浏览器（以服务端收到 `/` 请求为准）；`--no-browser` 可关闭，`--check-browser` 可查看启动环境
-- 网页管理端：配置 DeepSeek Key / 模式 / 模型 / Base URL，保存到工作区 `.env` 并热切换
-- 主动回复：全局“回复上一条”，以及时间线里每条弹幕的“回复这条”
-- 80 项自动化测试通过；原生窗口、TTS、HTTP、WebSocket 均已实机跑通，便携版 exe 已打包验证
+```text
+danmaku_pet/
+├─ shared/                 云端/本地共享协议（唯一跨端契约）
+│  ├─ events.py            Event：room_id / message_id / user_id / gift_id ...
+│  ├─ plans.py             ActionPlan、DecisionResult、枚举
+│  ├─ commands.py          PerformCommand、PerformResult、状态机
+│  └─ protocol.py          JSON 信封、版本兼容、DedupCache、command_id
+├─ cloud/                  抖音云后端（python -m danmaku_pet.cloud）
+│  ├─ __main__.py          0.0.0.0:8000（run.sh 启动；每实例 1 Worker，状态在 Redis）
+│  ├─ server.py            REST + 管理端 WS + 客户端 WS + 平台推送接收
+│  ├─ config.py            云端环境变量（密钥只读，永不回写 .env）
+│  ├─ orchestrator.py      CloudOrchestrator：请求内决策/下发（无 worker）
+│  ├─ state.py             RoomState + Memory/Redis 状态存储
+│  ├─ sessions.py          客户端 ↔ 房间绑定（活连接，WSS 备用）
+│  ├─ gateway.py           mock / wss / douyin_cloud 三种下行
+│  ├─ ws_gateway.py        自建 WSS（开发/备用，与正式链路隔离）
+│  ├─ auth.py              管理端 / 客户端令牌
+│  ├─ content_safety.py    评论输入 + 模型输出检查
+│  └─ metrics.py           分段耗时与计数
+├─ client/                 开播电脑客户端（python -m danmaku_pet.client）
+│  ├─ __main__.py          本地页面 + 桌宠 + 云端连接
+│  ├─ startup.py           启动参数、平台 launch 参数、校验
+│  ├─ connection.py        websocket / static / platform 三种通道，心跳与重连
+│  ├─ dispatcher.py        指令去重、过期、排序、礼物抢占、回执
+│  ├─ executor.py          EdgeTTS → 动作 → 结果
+│  ├─ diagnostics.py       连接/房间/动作/音频/桌宠/错误
+│  └─ status_server.py     http://127.0.0.1:8787/ 本地诊断页
+├─ douyin/                 官方平台接入
+│  ├─ openapi.py           可配置路径的 HTTP 客户端（超时/重试/错误分类）
+│  ├─ verifier.py          header / HMAC 校验
+│  ├─ tasks.py             评论、礼物任务启动/停止/重试
+│  ├─ receiver.py          推送接收：校验 → 解析 → 去重 → 派发
+│  ├─ adapter.py           官方字段 → Event
+│  └─ dedup.py             message_id / 受控复合去重
+├─ decision/               模型决策与礼物剧本（云端）
+├─ execution/              本地 TTS、动作映射、dafeiyu、执行后端
+├─ web/
+│  ├─ cloud/index.html     云端管理端
+│  └─ client/index.html    本地诊断页
+├─ inputs/                 模拟评论 / 礼物数据（阶段 0/3 联调用）
+├─ config.py               本地客户端运行配置
+├─ persona.py              角色语气（云端）
+└─ paths.py                源码/打包的只读资源与可写目录
+Dockerfile                 云端镜像（构建上下文 = 仓库根目录）
+.dockerignore              构建上下文排除项（密钥/缓存/日志/产物）
+deploy/
+├─ docker-compose.yml      仅本地联调
+└─ cloud.env.example       变量名与安全占位
+docs/                      平台设置、部署、开播、排障、改造对照
+packaging/                 Windows 客户端 PyInstaller 配置
+scripts/                   安装、启动、打包、冒烟、模拟指令
+tests/                     协议、云端、平台适配、客户端、部署测试
+```
 
 ---
 
 ## 2. 快速开始
 
-### 2.1 环境约定
-
-项目使用**工作区内的独立 conda 前缀**，不依赖全局 Python，也不需要 `conda activate`；所有命令都通过项目解释器 `.\.conda\env\python.exe` 执行。
-
-```text
-conda 前缀:  ./.conda/env
-Python:      3.11
-解释器:      .\.conda\env\python.exe
-```
-
-依赖、缓存、临时文件和下载素材全部落在工作区内：`.conda/`、`.cache/`（pip/npm/conda 缓存）、`vendor/`（桌面小人素材）、`temp/`、`assets/`。唯一的外部前提是本机已安装 conda 与 Node（`npm` 仅用于 `npm pack` 下载素材，不装全局包）。
-
-### 2.2 配 DeepSeek Key
+### 2.1 环境
 
 ```powershell
-Copy-Item .env.example .env
-notepad .env
-```
-
-至少填写：
-
-```dotenv
-DEEPSEEK_API_KEY=sk-...
-LLM_MODE=auto
-```
-
-`LLM_MODE=auto` 的行为：
-
-- 有 Key：真实调用 DeepSeek，控制台显示 `DeepSeek`
-- 没有 Key：自动使用本地模拟决策，控制台明确显示 `本地模拟`，不会伪装成真实模型
-
-Key 只保存在工作区 `.env`，不会写入日志，也不会被提交到 Git。
-
-**Key 会存在哪、会不会被打进包**：
-
-| 文件 | 谁创建 | 会不会进 Git | 会不会进发行包 |
-| --- | --- | --- | --- |
-| 项目根 `.env` | 你手动 / 网页设置 | ❌（`.gitignore`） | ❌（spec 不收集，打包脚本排除） |
-| 便携版 exe 旁 `.env` | 首次在网页「设置」里保存 Key 时 | ❌ | ❌（`build_exe.ps1 -Zip` / `release.ps1` 都按文件名排除 `.env`、`.env.tmp`；`release.ps1` 压完还会打开 zip 复查，发现就删包报错） |
-| `dist/…/.env.example` | 打包脚本从 `.env.example` 复制 | — | ✅ 只是占位模板，不含真实 Key |
-
-所以：**打包不会带上你的 Key**。想给自己留一份“开箱即用”的便携版，把 `.env` 放在 exe 旁边即可（只在本机用，别把这个文件夹发给别人）；`dist/release/*.zip` 里永远只有 `.env.example`。
-
-
-也可以启动后在网页右上角 **设置** 中填写 Key、模式和模型，保存后热切换，不需要手动编辑 `.env`。
-
-> 管理端只监听 `127.0.0.1`，没有额外的登录鉴权；不要把 `APP_HOST` 改成 `0.0.0.0` 暴露到局域网。
-
-### 2.3 启动
-
-```powershell
-# 推荐：项目脚本（会固定 TEMP/PIP_CACHE_DIR 到工作区）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1
-
-# 或者直接启动
-.\.conda\env\python.exe -m danmaku_pet
-```
-
-启动后会自动用默认浏览器打开管理页面：
-
-```text
-http://127.0.0.1:8787/
-```
-
-打开方式与双击桌面快捷方式一致：把 URL 交给 Windows 自己的 Shell（`ShellExecute`），由系统默认浏览器接管。是否真的打开不靠窗口标题判断，而是看本地服务有没有收到 `/` 请求：
-
-- 收到请求：控制台显示 `已在浏览器打开管理页面`。
-- 浏览器进程起来了但页面还没请求：提示“浏览器已启动，但管理页面请求还没有到达”，此时不会继续弹新窗口。
-- 完全没起来：按顺序继续尝试，最后逐条列出结果。
-
-尝试顺序（每一步都按“服务端是否收到 `/` 请求”判断成功，失败才继续）：
-
-1. 系统默认浏览器（`ShellExecute` / `os.startfile`）
-2. `PowerShell Start-Process <url>`
-3. 已安装浏览器的可执行文件（默认浏览器优先，其次 Edge 等备选）
-4. 独立配置的浏览器窗口（`--user-data-dir` 指到 `temp/browser-profile`，绕过被占用/跨权限的默认配置）
-5. `cmd start`
-
-每一步如果启动后立刻退出，会把**退出码和浏览器自己的报错**一并打印出来（例如 Chrome 的 `crash server failed to launch`、`Failed to create a ProcessSingleton`），这比“未能打开”有用得多。浏览器子进程拿到的是系统默认 `TEMP/TMP`（不是 `run.ps1` 指到工作区的那份）。
-
-自动打开失败时做一次启动测试：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1 --check-browser
-```
-
-它会打印默认浏览器、会话/桌面、完整性级别、进程是否受限、正在运行的浏览器及其权限级别，并实际尝试启动记事本、带临时配置的浏览器和带当前配置的浏览器，最后给出一句结论（当前会话禁止启动图形程序 / 浏览器启动后立即退出 / 浏览器其实能启动）。把这段输出贴出来即可定位。
-
-**不需要管理员权限**：普通用户本来就能打开浏览器。反过来的情况才会出问题——如果 Chrome 是以管理员身份运行的、而本项目不是（或相反），Windows 会把两者隔开，自动打开会静默失败；这时要么用同一种权限启动，要么用上面的“独立配置”兜底。也可以手动访问上面的地址，或用 `--no-browser` 关闭自动打开。
-
-### 2.3.1 启动器不弹窗时
-
-`--check-browser` 的 `完整性级别` 是排查的第一行：
-
-- **中**：正常。浏览器起不来就多半是 Chrome 配置被占用或安全软件，看「启动测试」里的退出码。
-- **低 / 不可信**：这个终端是受限的（例如从沙箱、自动化工具或受限令牌的 shell 里启动）。Windows 的强制完整性控制会拒绝这种进程写「中等」标记的文件，而 Chrome 启动时必须写自己的配置目录，于是它一启动就退出（`0x80000003`，日志里是 `Crashpad\settings.dat: 拒绝访问 (0x5)`）。请从**开始菜单**新开一个 PowerShell / Windows Terminal 再运行；如果新窗口仍是「低」，就用「以管理员身份运行」打开终端（高完整性同样能写）。
-- **高（管理员）**：可以写，但浏览器也会以管理员身份运行；如果平时已经用普通权限开着 Chrome，会撞上配置占用。
-
-自查当前窗口的完整性级别：
-
-```powershell
-whoami /groups | findstr /i mandatory
-```
-
-显示 `Mandatory Label\Medium Mandatory Level` 才是普通交互式会话；显示 `Low Mandatory Level` 就是受限进程。
-
-注意：**自动回复默认关闭**。手动输入框的“发送给小鱼”仍会立即回复；模拟弹幕循环产生的消息会先进入“待回复”列表。要让它自动念弹幕并回复，打开输入区上方的“自动回复弹幕”开关。
-
-关闭桌面小人，只验证网页/TTS/队列：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1 --no-desktop
-```
-
-不自动打开浏览器：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1 --no-browser
-```
-
-强制本地模拟：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1 --mock
-```
-
-### 2.4 从零安装
-
-```powershell
-conda create -p ./.conda/env python=3.11 -y
+# 首次从零安装（项目内 conda 前缀 + 依赖 + dafeiyu 素材）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-`install.ps1` 会：
+解释器固定为 `.\.conda\env\python.exe`，不依赖全局 Python。
 
-1. 检查/创建 `./.conda/env`（若标准 conda 因 ToS 插件失败，会重试 `--no-plugins --solver classic`）
-2. 用项目解释器执行 `scripts/pip_workspace.py install -r requirements.txt`
-3. 用 `npm.cmd pack` 把 `dsh-dafeiyu@0.1.21` 下载到 `./vendor/` 并解压
-4. 运行 `scripts/verify_install.py` 验证所有路径
+- `requirements-cloud.txt`：云端镜像依赖
+- `requirements-client.txt`：开播电脑依赖（含 PySide6 / pygame / edge-tts）
+- `requirements.txt`：本地开发与测试（引用 client + pytest）
 
-> 本机 PowerShell 执行策略可能禁止 `.ps1`。上面的 `-ExecutionPolicy Bypass` 只作用于当前进程，不修改系统策略。
-
-### 2.5 打包成 exe（便携版）
+### 2.2 本地跑云端（开发模式）
 
 ```powershell
-# 打包（首次会自动把 PyInstaller 装进项目环境）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_cloud.ps1
+```
 
-# 打包并压成一个带版本号的 zip
+默认 `APP_ENV=dev`、`GATEWAY_MODE=mock`、`DEFAULT_ROOM_ID=dev-room`，启动日志会打印本次生成的
+`ADMIN_TOKEN` 和 `CLIENT_TOKEN`（临时、每次重启都变；正式环境在抖音云密钥管理里配置固定值）。
+
+- 管理端：`http://127.0.0.1:8000/`（输入 ADMIN_TOKEN 进入）
+- 存活性探针：`http://127.0.0.1:8000/v1/ping`
+- 详细健康检查：`http://127.0.0.1:8000/api/health`
+- 模拟评论/礼物：管理端「模拟互动」或 `scripts/smoke_test.py`
+- 状态存储：dev 默认 `STATE_BACKEND=memory`；要验证平台要求的无状态链路，启动一个 Redis 并设置
+  `STATE_BACKEND=redis` + `REDIS_URL=redis://127.0.0.1:6379/0`。prod 强制 Redis，详见
+  [抖音云规范对照](docs/抖音云规范对照.md)。
+
+本地云端配置写在 `.env.cloud`（已 gitignore），不会和客户端 `.env` 混用：
+
+```powershell
+Copy-Item .\deploy\cloud.env.example .\.env.cloud
+notepad .\.env.cloud   # 本地开发记得把 STATE_BACKEND 改成 memory，或先启动 Redis 并用 redis
+```
+
+### 2.3 本地跑客户端
+
+**不连云端，先用模拟指令验收本地语音和动作（阶段 3 验收路径）：**
+
+```powershell
+.\.conda\env\python.exe .\scripts\make_mock_commands.py
+.\.conda\env\python.exe -m danmaku_pet.client `
+  --transport static `
+  --static-commands .\temp\mock-commands.jsonl `
+  --room-id dev-room
+```
+
+**连本地云端（WSS 备用链路）：**
+
+```powershell
+# 云端改用 wss 下行
+$env:GATEWAY_MODE="wss"; powershell -File .\scripts\run_cloud.ps1
+
+# 客户端：令牌用云端启动日志里的 CLIENT_TOKEN
+.\.conda\env\python.exe -m danmaku_pet.client `
+  --room-id dev-room `
+  --cloud-url ws://127.0.0.1:8000/ws/client `
+  --client-token "<CLIENT_TOKEN>"
+```
+
+客户端会自动打开本地状态页 `http://127.0.0.1:8787/`；`--no-browser` 可关闭。
+
+### 2.4 Docker（本地验证镜像）
+
+```powershell
+Copy-Item .\deploy\cloud.env.example .\deploy\cloud.env
+docker build -t danmaku-pet-cloud:dev .
+docker compose -f .\deploy\docker-compose.yml up
+```
+
+`Dockerfile` 和 `.dockerignore` 都在仓库根目录，构建上下文就是仓库根目录；`deploy/` 只保留
+compose 与 cloud env 样例。镜像内**没有** PySide6、pygame、edge-tts、桌宠 helper；`/v1/ping`
+是抖音云存活性探针，也是容器健康检查（更详细的 `/api/health` 保留）。
+
+本机没有 Docker 时，可先用 `.\\.conda\\env\\python.exe .\\scripts\\verify_dockerfile.py` 做
+COPY/上下文/运行时契约校验（不能替代真实 `docker build`）。
+
+正式部署、密钥配置、回滚见 [部署手册](docs/部署手册.md)。
+
+### 2.5 打包 Windows 客户端
+
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_exe.ps1 -Clean -Zip
 ```
 
-产物：
+产物 `dist/DanmakuPet/`（onedir，约 150 MB）只包含客户端：
 
 ```text
-dist/DanmakuPet/
-├─ DanmakuPet.exe        唯一的 exe，双击即启动（控制台窗口里能看到日志和地址）
-├─ _internal/            运行时、PySide6、网页、桌宠素材
-├─ .env.example          配置样例
-└─ （首次运行生成）.env / data/ / assets/ / temp/ / .cache/
+DanmakuPet.exe
+_internal/           运行时、PySide6、本地状态页、小人素材
+.env.example         仅非敏感占位
 ```
 
-- 整个 `dist/DanmakuPet` 文件夹就是绿色版，拷到任何目录都能用；删除即卸载，不写注册表。
-- 首次运行会在 exe 旁边生成 `data/persona.json`（从内置默认复制）、`assets/tts_cache/`、`temp/`、`.cache/`。DeepSeek Key 可以在网页右上角 **设置** 里填，会写进同目录的 `.env`，下次启动生效。
-- 打包内容只包含运行时需要的东西：`danmaku_pet/web`、内置人设、`vendor/dafeiyu/package/runtime/*.py` 与 `assets/`；`vendor` 里的文档、`node_modules`、`native/`，以及 `runtime/bin`（上游附带的 174 MB 预编译 helper）都不会进包。
-- 体积：目录约 **150 MB**，压成一个 zip 约 **98 MB**（PySide6 约 46 MB + 桌宠素材约 55 MB + 其余运行时），启动约 2–4 秒。
-- PyInstaller 会把 Qt 的整条依赖链收进来，spec 里做了裁剪：去掉 `opengl32sw.dll`、Qt6Quick/Qml/Pdf/OpenGL/Network、Qt 翻译文件、多余的平台与图片插件，只保留 `QtCore/QtGui/QtWidgets` 的 raster 绘制所需部分。
-- 构建配置在 [`packaging/DanmakuPet.spec`](packaging/DanmakuPet.spec)，入口是 [`packaging/launcher.py`](packaging/launcher.py)。
-- 桌宠在打包后不是子脚本而是**同一个 exe 以 `--run-dafeiyu-helper` 重入**运行（`danmaku_pet/paths.py` 把只读资源指向 `_internal`，可写目录指向 exe 所在文件夹）。
-- exe 同样受「完整性级别」影响（见 2.3.1）：从开始菜单双击/普通窗口运行时是「中」，浏览器能正常弹出；如果从受限终端启动，浏览器仍会被 Windows 拦下。
+`.env`、`temp/`、`assets/` 不会进 zip；代码里也没有任何模型 Key。开播前配置见
+[开播手册](docs/开播手册.md)。
 
-> 这里用的是 PyInstaller **onedir**：目录里只有一个 exe，其余是它运行时需要的 DLL 和资源。没有用 `--onefile`，因为单文件每次启动都要把 150 MB 解压到临时目录（首启 5–10 秒），桌宠子进程还会再解压一份；而且 LGPL 组件保持为可替换的独立 DLL 更符合许可要求。
-
-> 打包需要写 `dist/`、`build/` 和项目的 `.cache/pip`，都在工作区内，不会装到全局 Python。
-
-### 2.6 一键发布到 Gitee 发行版
-
-先说结论：**Gitee 的云端流水线（Gitee Go）打不出这个项目的 exe** —— 它的构建机是 Linux 容器（CentOS / Ubuntu），没有 Windows 运行环境，而本项目依赖 PyInstaller + PySide6 + PowerShell 脚本。发布放在本机一条命令里完成：
+### 2.6 兼容入口
 
 ```powershell
-$env:GITEE_TOKEN = "你的 Gitee 私人令牌"   # Gitee → 设置 → 私人令牌，勾选 projects
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0
-```
-
-它会依次完成：打包便携版 → 生成**一个**带版本号的 zip → 推送 tag → 创建发行版 → 上传附件。
-
-```text
-dist/release/DanmakuPet-0.1.0-win64.zip    98.3 MB
-```
-
-解压后是一个目录，里面只有一个 `DanmakuPet.exe`，双击即可运行。
-
-常用参数：
-
-```powershell
-# 只打包、不上传，之后在网页上手动拖拽
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -NoUpload
-
-# 复用已有的 dist\DanmakuPet，不重新打包
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -SkipBuild -Tag v0.1.0
-
-# 自定义发行说明 / 标记预览版
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0 -NotesFile .\release-notes.md -Prerelease
-
-# 万一以后依赖变大、附件超过 100 MB：拆成「主程序 + 素材」两个包
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1 -Tag v0.1.0 -Split
-```
-
-- Gitee 发行版单个附件上限 **100 MB**；正常构建的整包约 98 MB，留了约 2 MB 余量。真超了就 `-Split`。
-- 令牌只在本机进程内使用，脚本不会把它写进仓库或 `.git/config`；用完可在 Gitee 撤销。
-- 附件上传走 Gitee Open API（`POST /repos/{owner}/{repo}/releases/{id}/attach_files`），用的是 Windows 自带的 `curl.exe`。
-- Gitee Go 仍然适合跑单元测试（Linux + pytest），但它不产 exe；想完全云端构建 Windows 包，用下面的 GitHub Actions。
-
-### 2.7 GitHub 自动打包（Actions）
-
-仓库在 Gitee 和 GitHub 各有一份。GitHub 的 Actions 有 **Windows runner**，所以**打包在 GitHub 云端完成**；Gitee 默认不参与，需要时再单独同步（见下面的 `sync_gitee`）。
-
-触发方式（见 [`.github/workflows/release.yml`](.github/workflows/release.yml)）：
-
-```powershell
-# 打标签即触发
-git tag v0.1.0
-git push github v0.1.0      # GitHub 远端
-git push origin v0.1.0      # Gitee 远端（可选，两边保持一致）
-```
-
-也可以手动触发：GitHub → Actions → `release` → **Run workflow**，填一个 tag。
-
-流水线做的事：
-
-```text
-checkout
- -> 装 Node（npm pack 拉 dafeiyu）和 Python 3.11
- -> pip install -r requirements.txt pyinstaller
- -> scripts/fetch_visual.ps1（含 spin 补丁）
- -> pytest -q
- -> scripts/release.ps1 -NoUpload -NoTag    # 打包 + 生成一个带版本号的 zip
- -> 生成 SHA256SUMS.txt
- -> 上传到 GitHub Releases（zip + 校验和）
- -> 只有手动触发并勾选 sync_gitee，才调 Gitee API 同步一份发行版
-```
-
-默认不传 Gitee 的原因：GitHub 的 runner 在境外，往 Gitee 传 97 MB 是跨境单连接，经常十几分钟还没完。要 Gitee 也有一份时，两个办法：
-
-- 手动触发 workflow 时勾选 `sync_gitee`（步骤上限 40 分钟）；
-- 或者从 run 页面的 Artifacts 下载 zip，在本机跑 `scripts/release.ps1 -SkipBuild -Token <令牌>` 补传——国内网络上快得多。
-
-只需要一个可选配置：
-
-| 位置 | 名称 | 用途 |
-| --- | --- | --- |
-| Settings → Secrets and variables → Actions | `GITEE_TOKEN` | 可选。只在勾选 `sync_gitee` 的手动构建里用到；不填就跳过 Gitee 上传 |
-
-首次使用还要确认两件事：
-
-1. **Actions 已启用**：Settings → Actions → General → Allow all actions。
-2. **Workflow permissions 设为 Read and write**：同一页往下拉，否则上传 Release 会被 403 拒绝。
-
-GitHub 单个 Release 附件上限是 2 GB，这个 98 MB 的包远在限内。Gitee 发行版的附件上限是 100 MB，只有勾选 `sync_gitee` 时才会碰到这个限制。
-
----
-
-## 3. 项目结构
-
-```text
-douyin-live/
-├─ danmaku_pet/
-│  ├─ __main__.py              CLI 入口：--mock / --no-desktop / --no-browser / --check
-│  ├─ server.py                FastAPI、REST、WebSocket、静态资源
-│  ├─ config.py                工作区内路径、环境变量、运行配置
-│  ├─ paths.py                 源码运行 / 打包运行的路径锚点（只读资源 vs 可写目录）
-│  ├─ browser.py               打开管理页面、完整性级别诊断
-│  ├─ models.py                Event / ActionPlan / AudioClip / VisualCue
-│  ├─ queueing.py              异步队列、3 秒过期、礼物抢占
-│  ├─ orchestrator.py          三段式编排：决策 -> TTS -> perform
-│  ├─ settings_store.py        工作区 .env 的安全写入
-│  ├─ persona.py               角色语气配置、加载与保存
-│  ├─ broadcaster.py           WebSocket 广播
-│  ├─ logging_setup.py         控制台 + temp/logs/app.log
-│  ├─ inputs/
-│  │  ├─ manual.py             手动输入 -> Event
-│  │  ├─ simulator.py          模拟弹幕循环 -> Event
-│  │  └─ douyin_webcast.py     未来 WebcastChat/Gift 的唯一适配边界
-│  ├─ decision/
-│  │  ├─ prompts.py            严格 JSON 系统提示词
-│  │  ├─ llm.py                DeepSeek 客户端 + 本地模拟引擎
-│  │  ├─ validator.py          枚举校验、兜底、字段清洗
-│  │  ├─ context.py            最近 10 轮上下文
-│  │  └─ gifts.py              礼物预设剧本
-│  ├─ execution/
-│  │  ├─ action_adapter.py     Motion -> dafeiyu 状态 / 浏览器动作映射表
-│  │  ├─ dafeiyu.py            原生 helper 子进程 + stdin JSON 协议
-│  │  ├─ backend.py            perform()：原生窗口 + 音频 + WebSocket
-│  │  └─ tts.py                EdgeTTS 合成、缓存、pygame 播放
-│  └─ web/                     index.html / styles.css / app.js
-├─ tests/                      80 项单元与编排测试
-├─ packaging/
-│  ├─ DanmakuPet.spec          PyInstaller 打包配置（onedir）
-│  └─ launcher.py              打包后的入口
-├─ .github/workflows/release.yml  打 tag 自动构建 Windows 便携版并发 Release
-├─ scripts/
-│  ├─ install.ps1              从零安装
-│  ├─ run.ps1                  本地启动
-│  ├─ build_exe.ps1            打包成便携版 exe
-│  ├─ release.ps1              打包 + 创建 Gitee 发行版 + 上传附件
-│  ├─ fetch_visual.ps1         本地下载 dafeiyu 包
-│  ├─ apply_dafeiyu_spin_patch.py 给本地 helper 加 spin effect
-│  ├─ pip_workspace.py         工作区兼容的 pip 临时目录启动器
-│  ├─ verify_install.py        安装位置验证
-│  ├─ ws_smoke.py              WebSocket 冒烟测试
-│  └─ capture_pet_window.ps1   只截取 dafeiyu 窗口的验证脚本
-├─ vendor/dafeiyu/package/     dsh-dafeiyu@0.1.21 本地包（install.ps1 下载，不入库）
-├─ assets/tts_cache/           EdgeTTS 音频缓存（不入库）
-├─ data/persona.json           可编辑的角色语气配置（不入库）
-├─ temp/                       日志、布局、临时文件、测试产物（不入库）
-├─ docs/screenshots/           截图
-├─ .conda/env/                 项目专属 conda 前缀环境（不入库）
-├─ .cache/                     pip / npm / conda / LOCALAPPDATA 缓存（不入库）
-├─ LICENSE                     MIT
-├─ THIRD_PARTY_NOTICES.md      依赖与素材许可声明
-├─ .env.example
-├─ requirements.txt
-└─ pytest.ini
+python -m danmaku_pet cloud ...     # 等价 python -m danmaku_pet.cloud
+python -m danmaku_pet client ...    # 等价 python -m danmaku_pet.client
+python -m danmaku_pet --no-desktop  # 旧写法，等同 client
 ```
 
 ---
 
-## 4. 模块职责与数据流
+## 3. 共享协议（阶段 2）
 
-### 4.1 输入层
+跨端只允许 import `danmaku_pet.shared`：云端不 import client，客户端不 import cloud/decision。
 
-`inputs/` 只负责把外部来源变成 `Event`，不碰 LLM，也不碰画面。
-
-```python
-Event(
-    source="manual" | "danmaku_sim" | "gift_sim",
-    user="观众昵称",
-    text="弹幕内容",
-    gift_name=None,
-    gift_count=0,
-    timestamp=time.time(),
-)
-```
-
-未来替换成抖音官方消息时：
-
-```python
-# inputs/douyin_webcast.py
-chat_event  = adapter.from_webcast_chat(WebcastChatMessage)
-gift_event  = adapter.from_webcast_gift(WebcastGiftMessage)
-```
-
-下游只消费 `Event`，完全不需要改动。
-
-### 4.2 决策层
-
-普通弹幕：
+### 3.1 Event
 
 ```text
-Event + 最近 10 轮上下文
-  -> DeepSeek /chat/completions
-  -> response_format={"type":"json_object"}
-  -> 解析 JSON
-  -> 枚举校验 / 兜底
-  -> ActionPlan
+source, user, text, gift_name, gift_count, timestamp, event_id
+room_id, message_id, message_type(comment|gift), user_id, gift_id
 ```
 
-`ActionPlan` 严格字段：
+- `message_type` 未指定时按 `source`/`gift_name` 推导，旧的 `Event(source="gift_sim", gift_name="玫瑰")` 仍然可用。
+- `display_text` 负责「送出 X × N」的展示文本；`to_llm_dict()` 不把 room/id 传给模型。
+
+### 3.2 ActionPlan
 
 ```json
 {
-  "reply": "不超过 60 个汉字的一句话",
+  "reply": "不超过 140 个汉字",
   "emotion": "happy | sad | surprised | shy | angry | neutral",
   "motion": "idle | nod | wave | jump | spin | shake_head | shy | sad | surprised",
   "priority": "normal | high",
-  "interrupt": false
+  "interrupt": false,
+  "min_hold_ms": 0
 }
 ```
 
-校验规则：
+`min_hold_ms` 是礼物剧本的最短动作保持提示；真实语音时长仍由本地 EdgeTTS 测量后决定。
 
-| 情况 | 处理 |
-| --- | --- |
-| 非法 `motion` | 正向/中性情绪回退 `nod`，其余回退 `idle` |
-| 非法 `emotion` | `neutral` |
-| 非法 `priority` | 普通事件 `normal`，礼物强制 `high` |
-| 礼物 `interrupt=false` | 强制 `true`，保证礼物能抢占 |
-| `reply` 为空 | 使用兜底回复 |
-| JSON 解析失败 | 使用兜底 `ActionPlan`，事件不崩 |
-| DeepSeek 网络失败 | 兜底 `ActionPlan` + UI warning，不阻塞队列 |
-
-礼物事件不调用 LLM：
+### 3.3 PerformCommand / PerformResult
 
 ```text
-嘉年华 -> surprised / spin / high / interrupt
-火箭   -> surprised / jump / high / interrupt
-跑车   -> happy / spin / high / interrupt
-玫瑰   -> shy / shy / high / interrupt
-...
-未知礼物 -> happy / wave / high / interrupt
+PerformCommand: protocol_version, command_id, room_id, event, plan,
+                created_at, expires_at, read_aloud
+PerformResult:  command_id, room_id, status, speech_ms,
+                error_code, error_message, client_id
 ```
 
-**当前时间**：模型本身不知道现在几点，所以每轮都会在**最后一条 user 消息**里带上
+状态机：`accepted → started → completed | interrupted | expired | error`。
 
-```text
-当前时间：2026-10-28 01:14 周三（本机本地时间）
-```
+- **command_id 确定性生成**：`sha1(room_id + message_type + message_id || event_id)`。
+  平台重试会换 `event_id` 但保留 `message_id`，因此同一个弹幕的指令 ID 不变，本地去重后不会重复表演。
+- **expires_at 绝对时间**：普通评论默认 8 秒（`COMMENT_EXPIRES_SECONDS`），礼物默认 30 秒
+  （`GIFT_EXPIRES_SECONDS`）。客户端重连后收到过期评论只回 `expired`，不会补演旧弹幕。
+- **协议版本**：当前 v1；版本不兼容时握手直接报错，不做静默降级。
 
-提示词里也明确要求：问到时间/日期/星期就用它直接回答，不许说“看下自己的表 / 我不知道”。放在 user 消息而不是 system prompt，是为了让 system 前缀逐轮保持不变，DeepSeek 的前缀缓存不被每分钟变化的时间戳打断。
+### 3.4 去重
 
-### 4.3 执行层
-
-`Orchestrator._process()` 的顺序：
-
-1. `decide()` 得到 `ActionPlan`
-2. `EdgeTTSService.synthesize(reply)` 生成或复用 MP3
-3. `AudioPlayer.measure()` 得到真实音频时长
-4. `ActionAdapter.build_cue(plan, audio_ms)` 生成 `VisualCue`
-5. `PerformanceBackend.perform(plan, event, audio, cue)`
-   - 发送 `visual` / `performance` 给浏览器
-   - 向 dafeiyu 发送 `pulse` 或 `state`
-   - 播放音频
-   - 等待 `cue.hold_ms`
-   - 发送 `state IDLE`
-6. 成功完成后写入上下文
-
-关键时序：
-
-```text
-hold_ms = max(mapping.min_hold_ms, speech_ms + 300)
-```
-
-所以动作不会在语音结束前结束。TTS 失败时用文本长度估算时长，仍然保持动作与“静音语音”的协调。
-
-### 4.4 网页管理端与主动回复
-
-右上角“设置”打开管理端：
-
-- 选择 `auto / deepseek / mock`
-- 填写或替换 DeepSeek API Key
-- 修改模型、Base URL
-- 保存后写入工作区 `.env`，并热切换决策引擎，不需要重启服务
-- Key 是只写字段：任何 API 都不返回 Key，页面只显示“已配置/未配置”
-- 如果当前正好有一次 DeepSeek 请求在途，保存会等它结束后再切换
-
-“角色语气”页签可以配置：
-
-- 角色名
-- 身份设定
-- 语气风格
-- 口头禅 / 说话习惯
-- 回复长度：短句 / 适中 / 稍长
-- 是否允许少量 emoji
-- 补充规则
-
-保存调用 `POST /api/settings/persona`，写入 `data/persona.json`，并重新构建系统提示词、热切换决策引擎。  
-角色设定只影响回复内容和语气，系统提示词会明确禁止它改变 JSON 字段和 `motion/emotion` 枚举。  
-本地模拟模式只简单使用角色名；完整语气效果需要真实 DeepSeek 模式。
-
-主动回复有两个入口：
-
-- 输入区“回复上一条”：重新走完整三段式流程，回复最近一条普通弹幕
-- 时间线每条弹幕的“回复这条”：指定某条旧弹幕再次回复
-
-它们不是回放旧 `ActionPlan`，而是用新的 `Event` 重新调用决策层、重新生成 TTS 和动作，因此会带上当前 10 轮上下文。
-
-所有弹幕默认**不会自动回复**：模拟/真实弹幕会进入“待回复”列表，不调用 LLM，也不播放 TTS。  
-打开输入区上方的“自动回复弹幕”开关后，新弹幕会先被念出来，再执行回复。  
-“回复上一条/回复这条”始终可用，用于手动处理待回复弹幕或再次回复旧弹幕。
-
-补充语义：
-
-- 开关状态写入 `.env` 的 `AUTO_REPLY`，默认 `false`
-- 关闭时进入 `pending` 收件箱（最多 30 条），**不受 3 秒过期影响**，等待人工处理
-- 开启时 `ingest()` 直接把事件以 `read_aloud=True` 入队
-- 手动输入框的“发送给小鱼”是显式操作，始终立即处理，不受开关影响；是否朗读弹幕由开关决定
-- 礼物不吃这个开关，始终走 high priority 剧本并抢占
-- 开启自动回复时 TTS 文本是：`{user}说：{弹幕}。{回复}`，音频时长会进入动作 `hold_ms` 计算
-
----
-
-## 5. 动作映射表
-
-dafeiyu 的原生协议只接受状态/脉冲，不接受任意 clip 名，因此适配器必须做“最近动作”映射。映射表在 `execution/action_adapter.py` 的 `MOTION_MAP` 中，也是未来替换 Live2D 时唯一需要重写的数据。
-
-| 我们的 motion | dafeiyu 原生状态 | 原生动作说明 | 浏览器预览片段 | 浏览器附加变换 | 最短保持 |
-| --- | --- | --- | --- | --- | --- |
-| `idle` | `IDLE` / `WORKING` | 待机；说话时用 `WORKING` 循环作为说话动画 | `idle` | 无 | 600ms |
-| `nod` | `SUCCESS` pulse | 用 success 片段代替点头 | `success[0:56]` | bob | 1600ms |
-| `wave` | `SUCCESS` pulse | 用 head_pat 抬手片段代替挥手 | `head_pat[0:64]` | sway | 2200ms |
-| `jump` | `SUCCESS` pulse | 用 success 腾跃片段 | `success[52:120]` | bounce | 2400ms |
-| `spin` | `SUCCESS` pulse + `effect` | helper 本地扩展做左右 yaw 转身，网页预览同步横向转身 | `success[96:196]` | 横向 yaw | 3000ms |
-| `shake_head` | `ERROR` pulse | 用 error 片段 + 抖动 | `error[0:64]` | shake | 2200ms |
-| `shy` | `WAITING` pulse | 用 head_pat 低头片段 | `head_pat[56:140]` | tilt | 2400ms |
-| `sad` | `ERROR` pulse | 用 error 低头片段 | `error[28:118]` | sink | 2800ms |
-| `surprised` | `WAITING` pulse | 用 poke 受惊片段 | `poke[0:56]` | pop | 2000ms |
-
-说明：
-
-- 原生窗口是主视觉；浏览器预览同步观测动作。`spin` 在两端都做“左右转身”，不是屏幕平面内的翻跟头。
-- dafeiyu 没有嘴巴/口型通道。说话期间保持动作状态 + `WORKING` 循环 + 网页语音波形，这是 MVP 的“说话动画”替代方案。
-- 原生 `pulse` 的完整 clip 可能长于语音，项目会在 `hold_ms` 后主动发 `IDLE`，因此动作不会拖尾，也不会早于语音结束。
-- 如果以后换成 Live2D 或自定义模型，只需要新增一个实现 `perform(plan, event, audio, cue)` 的后端，并替换 `MOTION_MAP`，上游完全不动。
-
----
-
-## 6. 为什么第一版优先 dsh-dafeiyu，而不是 dsh-bigfish
-
-| 维度 | dsh-dafeiyu | dsh-bigfish |
+| 位置 | 键 | 默认 TTL |
 | --- | --- | --- |
-| 形态 | Windows 原生透明置顶窗口 | DSH Web 内 React/Canvas 宠物 |
-| 动作入口 | 简单行协议 `state/pulse/task/config` | 绑定 DSH Session 事件，没有外部 `perform` |
-| 接入 Python 的难度 | 低：可直接运行其 `runtime/helper.py` | 高：需要伪造/桥接 DSH Web 会话 |
-| 动作数量 | 16 组 clip，够 MVP | 101 类动作，更丰富 |
-| 本项目取舍 | **第一版选它**：桌面陪伴感强、协议简单、视觉与 Python 解耦 | 后续需要更丰富动作时的升级候选 |
-
-关键结论：**bigfish 的动作集更好，但它的驱动入口是 DSH 会话状态，不是外部动作 API。** 为了让它响应 “spin”，需要额外写 DSH 插件/会话桥，超出 MVP 范围。dafeiyu 的协议虽然也只有状态级控制，但可以在 Python 进程里直接驱动，且原生窗口效果更接近“直播间虚拟小人”。
-
-dafeiyu 本身没有动作级 API，所以本项目给它的本地 helper 加了一个很小的 `effect` 扩展：`spin` 时在 Qt 绘制层做横向 yaw（左右转身），不改变上游的 `state/pulse` 协议和动画资产。补丁脚本是 `scripts/apply_dafeiyu_spin_patch.py`，升级 dafeiyu 后需要重新执行一次。
-
-另外，dafeiyu 官方 `.exe` 的 PyInstaller 自解压层在本工作区的临时目录下无法创建解压结构。为了不写系统临时目录，本项目直接运行 `runtime/helper.py`，并显式把 `TEMP/TMP/LOCALAPPDATA/布局文件` 指向工作区。视觉代码、资源和动画与插件一致。
+| 平台推送入口 | `message_id`，缺失时用受控复合键（room/user/text/gift/秒桶） | 600s |
+| 云端下发 | `command_id` | 600s |
+| 本地执行 | `command_id` | 600s |
+| 本地队列 | 单实例、FIFO；礼物抢占 | — |
 
 ---
 
-## 7. 队列与打断语义
+## 4. 云端决策（阶段 3）
 
-`EventQueue`：
+- 每个 `room_id` 一份 `RoomState`：上下文、待回复、统计、当前指令、自动回复/暂停，存在 Redis（dev 用内存）。
+- 普通评论：请求内做内容检查 →（自动回复开启时）DeepSeek → JSON 校验 → `PerformCommand`。
+- 礼物：**绕过模型**，直接走高优先级剧本（`priority=high`、`interrupt=true`），由客户端打断当前表演。
+- 自动回复**默认关闭**（`AUTO_REPLY=false`）：新弹幕进入「待回复」，由主播在管理端手动选择；礼物不受此开关影响。
+- 单房间单动作由**客户端**强制（云端只负责下发，不等回执）；HTTP 请求内完成决策+下发，不把工作留给后台 worker。
+- 状态切换由客户端回执 `/ws/client` 更新 Redis；换实例后下一个请求从 Redis 继续。
+- 云端**不碰**音频设备和桌面小人，也不计算真实语音时长。
 
-- 普通事件 FIFO
-- 队列上限 50
-- 出队时检查 `timestamp`，超过 3 秒直接丢弃并广播 `dropped`
-- 礼物事件：
-  1. 先 `cancel()` 当前 `_process` 任务
-  2. 停 TTS / 通知 dafeiyu 回 `IDLE`
-  3. 清空队列中的普通事件
-  4. 把礼物插到队首
-  5. 礼物剧本立即执行
+### 4.1 内容安全
 
-这保证“嘉年华”不会排在 20 条过期弹幕后面，也不会等当前 10 秒动作播完。
+- 评论：去控制符/零宽字符、长度上限、敏感词拦截、提示词注入标记（标记后仍按普通数据交给模型）。
+- 回复：去掉 HTML 标记、敏感词命中替换为安全兜底话术、硬长度上限。
+- 管理端可看到 `replies_sanitized`、`comments_flagged` 计数。
 
-自动回复关闭时，普通弹幕不会进入 `EventQueue`，而是进入 `pending` 收件箱；手动点“回复”后才入队。因此 3 秒过期只作用于“已决定要自动处理”的队列，不会让待回复弹幕悄悄消失。
+### 4.2 监控
 
-自动回复开启时，实测压测：
+`/api/status` 与管理端「网关与指标」提供：决策耗时、下发耗时、客户端开始执行耗时、表演时长、各状态计数、
+各房间状态、丢弃、重复、超时。
+
+---
+
+## 5. 抖音官方接入（阶段 5）
+
+所有官方接口路径都来自配置，默认空：
+
+```dotenv
+DOUYIN_OPENAPI_BASE_URL=
+DOUYIN_TOKEN_PATH=
+DOUYIN_TASK_START_PATH=
+DOUYIN_TASK_STOP_PATH=
+DOUYIN_TASK_STATUS_PATH=
+DOUYIN_COMMAND_PUSH_PATH=
+DOUYIN_COMMAND_INTERRUPT_PATH=
+```
+
+路径为空时对应调用会抛 `PlatformNotConfigured`，并在管理端/日志里给出明确提示；**不会**去猜接口地址。
+
+- `POST /api/douyin/events/comment`、`/api/douyin/events/gift`：接收平台推送。
+- 校验：`DOUYIN_VERIFY_MODE=header|hmac|disabled`（正式环境禁止 disabled）。
+- 重复推送返回 200 + `duplicate: true`，避免平台无限重试；格式错误返回 422。
+- 评论/礼物任务：管理端按钮或 `POST /api/douyin/tasks/start|stop`，失败按指数退避重试。
+- 礼物匹配优先 `gift_id`（`GIFT_ID_MAP=giftId=嘉年华,giftId2=火箭`），名称只用于展示和旧剧本兼容。
+- 正式下行是 `GATEWAY_MODE=douyin_cloud`；`wss` 只作为开发/备用，与正式链路完全隔离。
+
+---
+
+## 6. 本地执行（阶段 6）
 
 ```text
-15 条模拟消息，1 秒一条
--> completed 5
--> dropped 10
--> queue 0
+PerformCommand
+  → EdgeTTS 合成（缓存）
+  → pygame 测量真实音频时长
+  → ActionAdapter 生成 VisualCue（hold = max(动作最短, 语音 + 300ms)）
+  → 回 started（带 speech_ms）
+  → dafeiyu 小人 + 音频播放
+  → 回 completed / error
 ```
+
+- 高优先级礼物到达时取消当前语音和动作，当前指令回 `interrupted`，只回执一次，再执行礼物。
+- TTS 失败：记录 `tts_failed`，按设计执行**静音动作**，不阻塞队列。
+- 桌宠 helper 失败：回 `error`（`visual_error`），页面显示最近错误。
+- 去重/过期/排序/抢占都在 `client/dispatcher.py`；云端断线期间回执进入有界 outbox，重连后补发。
+- 握手：`hello(token, client_id, room_id)` → `welcome(protocol_version, gateway_mode)`；心跳 8 秒，3 个周期无响应重连。
+- 本地**不开入站端口**（状态页只监听 127.0.0.1），不存 DeepSeek Key。
+
+### 6.1 三种通道
+
+| `--transport` | 用途 | 说明 |
+| --- | --- | --- |
+| `websocket` | 开发 / 自建 WSS 备用 | 连 `/ws/client`，需要 CLIENT_TOKEN |
+| `static` | 本地验收 | 从 JSONL 回放模拟云端指令，回执写同目录 `.results.jsonl` |
+| `platform` | 正式抖音云网关 | 等平台给出客户端 SDK/启动参数；当前显式报错，不假装已连接 |
+
+### 6.2 平台启动参数
+
+平台最终传参格式待确认，因此采用「已知别名映射 + 未知键保留」：
+
+```powershell
+DanmakuPet.exe --launch room_id=123 --launch token=abc --launch plugin_version=1.2.3
+```
+
+`room_id / client_id / cloud_url / client_token` 会被映射；其他键出现在
+`/api/status` 的 `platform_param_keys` 里。确认平台规范后只需扩展
+`client/startup.py` 的 `LAUNCH_KEY_MAP`。
+
+---
+
+## 7. 安全与密钥边界
+
+| 内容 | 位置 | 是否会进镜像/EXE/Git |
+| --- | --- | --- |
+| DeepSeek Key | 抖音云密钥管理 → 容器环境变量 | 否 |
+| ADMIN_TOKEN / CLIENT_TOKEN | 抖音云密钥管理 | 否 |
+| 平台 App Secret / 验签密钥 | 抖音云密钥管理 | 否 |
+| 客户端 `.env` | 开播电脑本地 | 否（gitignore，打包排除） |
+| `deploy/cloud.env` | 仅本机 docker compose | 否（gitignore） |
+
+- 云端**没有任何写 Key 的接口**（`/api/settings/llm` 不存在）；人设可以改，密钥不行。
+- 日志统一经过 `SecretMaskFilter`，令牌/密钥被替换为 `***`；uvicorn 访问日志默认关闭（URL 可能带令牌）。
+- 观众昵称和弹幕文本默认**不写日志**（`LOG_VIEWER_DATA=false`）；排障确需时才显式打开。
+- 回答「现在几点」使用 `DISPLAY_TIMEZONE`（默认 `Asia/Shanghai`），不受容器 UTC 影响。
+- 管理接口与模拟接口分离：模拟评论/礼物、模拟循环、清空上下文在正式环境默认 404
+  （`ENABLE_TEST_ENDPOINTS=false`）。
+- 本地页面只显示非敏感信息；`public_status()` 不包含任何令牌。
 
 ---
 
 ## 8. API
 
+### 云端（`python -m danmaku_pet.cloud`，默认 8000）
+
+| 方法 | 路径 | 鉴权 | 作用 |
+| --- | --- | --- | --- |
+| GET | `/` | — | 云端管理端页面 |
+| GET | `/v1/ping` | — | 抖音云存活性探针，固定 200 |
+| GET | `/api/health` | — | 详细存活/版本/房间数/网关模式 |
+| GET | `/api/status` | ADMIN | 完整快照（脱敏） |
+| GET | `/api/rooms`、`/api/rooms/{room}` | ADMIN | 房间与客户端 |
+| POST | `/api/rooms/{room}/events/manual` | ADMIN + 测试接口 | 模拟评论 |
+| POST | `/api/rooms/{room}/events/gift` | ADMIN + 测试接口 | 模拟礼物 |
+| POST | `/api/rooms/{room}/reply` | ADMIN | 回复待回复弹幕 |
+| POST | `/api/rooms/{room}/interrupt` | ADMIN | 打断当前表演 |
+| POST | `/api/rooms/{room}/pause` | ADMIN | 暂停/恢复插件 |
+| POST | `/api/rooms/{room}/context/clear` | ADMIN + 测试接口 | 清空上下文 |
+| POST | `/api/settings/auto-reply` | ADMIN | 自动回复开关（可指定房间） |
+| POST | `/api/settings/persona` | ADMIN | 角色语气（写 Redis `dmp:persona`） |
+| POST | `/api/simulator/start`、`/stop` | ADMIN + 测试接口 | 模拟循环 |
+| GET/POST | `/api/douyin/tasks`、`/start`、`/stop` | ADMIN | 评论/礼物任务 |
+| POST | `/api/douyin/events/comment`、`/gift` | 平台验签 | 官方推送入口 |
+| WS | `/ws?token=` | ADMIN | 管理端实时事件 |
+| WS | `/ws/client` | CLIENT_TOKEN | 客户端握手/指令/回执 |
+
+### 本地（`python -m danmaku_pet.client`，默认 8787，仅 127.0.0.1）
+
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| `GET` | `/` | 控制台 |
-| `GET` | `/api/health` | 存活检查 |
-| `GET` | `/api/status` | 配置、队列、统计、最近事件、后端状态 |
-| `POST` | `/api/events/manual` | `{text,user}` 手动输入 |
-| `POST` | `/api/events/gift` | `{gift_name,gift_count,user,text?}` 礼物测试 |
-| `POST` | `/api/chat/reply` | `{event_id?,text?,user?}` 主动回复上一条/指定弹幕 |
-| `POST` | `/api/settings/auto-reply` | `{enabled}` 开关自动回复（默认关闭，持久化到 `.env`） |
-| `POST` | `/api/settings/persona` | 角色名/身份/语气/口头禅/长度/emoji/补充规则 |
-| `POST` | `/api/settings/llm` | `{mode,api_key?,model?,base_url?,clear_key?}` 保存并热切换 LLM |
-| `POST` | `/api/simulator/start` | `{interval_seconds,scenario}` 启动模拟循环 |
-| `POST` | `/api/simulator/stop` | 停止模拟循环 |
-| `POST` | `/api/interrupt` | 打断当前表演 |
-| `POST` | `/api/context/clear` | 清空 10 轮上下文 |
-| `GET` | `/api/actions` | 动作映射表 + 礼物剧本表 |
-| `GET` | `/assets/pet-manifest.json` | dafeiyu 动画清单 |
-| `GET` | `/assets/pet/...` | dafeiyu 动画帧 |
-| `GET` | `/media/tts_cache/...` | 生成的 TTS 音频 |
-| `WS` | `/ws` | 实时事件、决策、动作、状态 |
+| GET | `/` | 本地诊断页 |
+| GET | `/api/health` | 本地存活 |
+| GET | `/api/status` | 连接/绑定/当前动作/音频/桌宠/错误 |
+| POST | `/api/interrupt` | 一键停止当前表演 |
+| POST | `/api/reconnect` | 重新连接云端 |
+| POST | `/api/bind` | 修改 room_id / cloud_url（只写非敏感项） |
+| GET | `/api/actions` | 动作映射表 |
 
 ---
 
 ## 9. 测试
 
 ```powershell
+$env:TEMP = (Join-Path (Get-Location) "temp\pytest-temp")
 .\.conda\env\python.exe -m pytest -q
 ```
 
-当前结果：
+当前：**277 项通过**。覆盖：
 
-```text
-80 passed
-```
+- 协议序列化、字段校验、版本不兼容、command_id 稳定性、DedupCache TTL；
+- 房间隔离、评论走模型、礼物绕过模型并抢占、单房间单动作、重复消息、过期、暂停、内容安全；
+- 云端鉴权、测试接口开关、平台推送验签/去重/422、客户端 WS 端到端（握手→指令→回执）；
+- 官方字段适配、复合去重、任务重试、OpenAPI 重试与错误分类；
+- 客户端指令去重/过期/排序/抢占/回执、TTS 失败降级、断线重连、静态回放；
+- 日志脱敏（令牌/Key）与观众昵称默认不写日志；
+- 部署文件与密钥边界（Dockerfile、.dockerignore、env 样例、requirements 拆分、打包入口）。
 
-覆盖：
-
-- Event / ActionPlan 契约
-- 非法枚举回退
-- 礼物剧本与别名
-- 10 轮上下文
-- DeepSeek JSON 解析、`response_format` 重试、HTTP 错误
-- 3 秒过期、队列上限、礼物抢占
-- 9 种 motion 的映射
-- 动作不早于语音结束
-- EdgeTTS 缓存与失败降级
-- Orchestrator 串行处理 / 完成 / 中断
-- 自动回复默认关闭、待回复收件箱、手动回复移除待回复
-- 自动模式先念弹幕再回复
-- 角色语气配置、提示词注入与 JSON 契约保持
-- 管理端 `.env` 写入、主动回复上一条/指定弹幕
-- Douyin Webcast 字段映射
-- 打开浏览器：成功/失败/进程起来但页面未请求、启动器降级
-- 打包路径锚点：只读资源与可写目录分离
+> 本机若用 pytest 的 `tmp_path` 遇到 `WinError 5`，是本机目录权限问题；测试统一用
+> `temp/test-artifacts/`，不依赖 `tmp_path`。
 
 ---
 
-## 10. 运行位置
+## 10. 与改造计划对应
 
-所有依赖与产物都在工作区内，`scripts/verify_install.py` 会逐项检查：
+| 阶段 | 代码落点 |
+| --- | --- |
+| 0 平台能力确认 | 全部官方地址/路径可配置；模拟评论、礼物在 `inputs/` |
+| 1 基线 | 原版本 tag `v0.1.0-baseline`；基线 87 项通过；本 README 记录结构 |
+| 2 共享协议 | `shared/`、`tests/test_protocol.py` |
+| 3 拆分 | `cloud/orchestrator.py`、`client/executor.py`、`execution/backend.py` |
+| 4 Docker 后端 | `Dockerfile`、`run.sh`、`.dockerignore`、`deploy/`、`cloud/__main__.py`、`/v1/ping`、`/api/health`、日志脱敏 |
+| 5 官方数据 | `douyin/`、`tests/test_douyin_*.py` |
+| 6 客户端 | `client/`、`packaging/`、`web/client/` |
+| 7 安全治理 | `content_safety.py`、`auth.py`、`metrics.py`、暂停/一键停止 |
+| 8 测试 | `tests/` 277 项、`scripts/smoke_test.py`、`scripts/make_mock_commands.py` |
 
-```text
-Python              <工作区>\.conda\env\python.exe
-conda 前缀           <工作区>\.conda\env
-site-packages       <工作区>\.conda\env\Lib\site-packages
-dafeiyu 素材         <工作区>\vendor\dafeiyu\package
-TTS 缓存            <工作区>\assets\tts_cache
-pip / npm / conda 缓存 <工作区>\.cache
-临时文件 / 日志       <工作区>\temp\（日志在 temp\logs\app.log）
-便携版产物           <工作区>\dist\DanmakuPet\
-```
-
-- 没有创建 `.venv`，没有使用全局 Python，没有 `pip install --user`，没有 `npm install -g`
-- `npm pack` 只用于把 `dsh-dafeiyu` 下载到 `vendor/`，缓存放在 `.cache/npm`
-- `verify_install.py` 会校验全部 Python distribution 都位于项目 conda 前缀，并运行 `pip check`
-
+仍未完成/需平台确认：抖音云网关客户端通道（`--transport platform` 显式报错）、真实接口路径与字段、
+礼物 ID 表、真实直播间联调。详见 [改造对照表](docs/改造对照表.md)。
 
 ---
 
-## 11. 已知限制 / 下一步
+## 11. 从旧版本迁移
 
-1. **还没有接真实抖音**：`inputs/douyin_webcast.py` 是唯一预留适配器，实际 Webcast 长连接、签名、心跳尚未接入。
-2. **DeepSeek Key**：可在网页右上角“设置”中填写，也可写 `.env`；没有 Key 时使用明确标注的本地模拟。
-3. **dafeiyu 的动作集不等于自定义枚举**：`spin` 通过本地 helper `effect` 做左右 yaw；`jump` 等仍通过状态/片段做最近动作映射。没有真实口型；需要完整骨骼/口型时换 Live2D 或自定义渲染器，接口已隔离。
-4. **TTS 依赖网络**：EdgeTTS 失败会自动降级为静音动作，不阻塞队列。
-5. **浏览器预览不是主视觉**：原生 dafeiyu 窗口才是；网页用于操作、观测和补充动作效果。
-6. **模型输出仍是概率性的**：已用 `response_format=json_object` + 提示词 + 枚举校验 + 兜底，但无法保证 100% 语义正确。
-
----
-
-## 12. 关键代码入口
-
-- 三段式编排：[`danmaku_pet/orchestrator.py`](danmaku_pet/orchestrator.py)
-- 队列与抢占：[`danmaku_pet/queueing.py`](danmaku_pet/queueing.py)
-- DeepSeek 客户端：[`danmaku_pet/decision/llm.py`](danmaku_pet/decision/llm.py)
-- JSON 校验：[`danmaku_pet/decision/validator.py`](danmaku_pet/decision/validator.py)
-- 礼物剧本：[`danmaku_pet/decision/gifts.py`](danmaku_pet/decision/gifts.py)
-- 动作映射：[`danmaku_pet/execution/action_adapter.py`](danmaku_pet/execution/action_adapter.py)
-- dafeiyu 协议：[`danmaku_pet/execution/dafeiyu.py`](danmaku_pet/execution/dafeiyu.py)
-- 执行器：[`danmaku_pet/execution/backend.py`](danmaku_pet/execution/backend.py)
-- EdgeTTS：[`danmaku_pet/execution/tts.py`](danmaku_pet/execution/tts.py)
-- Web 控制台：[`danmaku_pet/web/index.html`](danmaku_pet/web/index.html)
+1. **本地 `.env` 里的 `DEEPSEEK_API_KEY` 不再被客户端读取**。请把它移到抖音云密钥管理
+   （或本地云端的 `.env.cloud`），然后从开播电脑 `.env` 里删掉。
+2. 旧的管理页面（含「设置 Key」）已移除：云端人设/自动回复/模拟互动走云端管理端，本地只剩诊断页。
+3. 启动方式变化：
+   - 旧：`python -m danmaku_pet` 一个进程全包；
+   - 新：`python -m danmaku_pet.cloud` + `python -m danmaku_pet.client`（旧命令仍可作为客户端启动）。
+4. 旧文件 `danmaku_pet/server.py`、`orchestrator.py`、`inputs/douyin_webcast.py`、
+   `web/app.js|index.html|styles.css` 已删除，替代物见目录结构。
+5. 原版本可回滚：tag `v0.1.0-baseline`。
 
 ---
+
+## 12. 文档
+
+- [平台设置清单](docs/平台设置清单.md)：开放平台/抖音云需要人工完成的事项
+- [抖音云规范对照](docs/抖音云规范对照.md)：逐条检查结果、已修项与仍需改造的无状态/后台任务差距
+- [部署手册](docs/部署手册.md)：本地与抖音云部署、密钥、回滚
+- [开播手册](docs/开播手册.md)：开播电脑、直播伴侣、音频、客户端参数
+- [故障排查](docs/故障排查.md)：从现象到修复
+- [改造对照表](docs/改造对照表.md)：计划条目 → 代码/测试，未完成边界
 
 ## 13. 许可证
 
-本项目代码以 **MIT** 许可发布，见 [LICENSE](LICENSE)。
+代码以 **MIT** 发布，见 [LICENSE](LICENSE)。第三方依赖与角色素材许可见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-运行时依赖与桌面小人素材的许可情况（含 PySide6 / edge-tts / pygame 的 LGPL 要求）见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-仓库里**不含**以下内容，克隆后按「2.4 从零安装」重建即可：
-
-| 内容 | 原因 | 如何获得 |
-| --- | --- | --- |
-| `vendor/dafeiyu/`（约 231 MB） | 上游 npm 包与角色素材，避免重复分发 | `scripts/install.ps1` / `scripts/fetch_visual.ps1` |
-| `.env` | 含个人 API Key | 从 `.env.example` 复制 |
-| `.conda/`（约 877 MB） | 本机环境 | `conda create -p ./.conda/env python=3.11 -y` + `install.ps1` |
-| `dist/`（约 201 MB） | 打包产物 | `scripts/build_exe.ps1` |
-| `temp/`、`assets/tts_cache/` | 运行产物与日志 | 首次运行自动生成 |
-
-如果你要二次分发便携版 exe，请同时遵守 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 里对 LGPL 组件与角色素材的说明。
-
-
+> 本仓库不包含：`vendor/dafeiyu/`（`scripts/fetch_visual.ps1` 下载）、`.conda/`、`.env`、
+> `dist/`、`temp/`、`assets/tts_cache/`。

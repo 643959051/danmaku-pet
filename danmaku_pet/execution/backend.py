@@ -1,12 +1,18 @@
-"""Composite execution backend: native desktop pet + TTS + UI preview."""
+"""Local performance backend: native desktop pet + TTS playback + UI preview.
+
+This module runs **only** on the 开播电脑.  It receives a validated
+:class:`ActionPlan` (already turned into a command by the cloud) and performs
+it; it never decides anything and never talks to DeepSeek.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from danmaku_pet.broadcaster import Broadcaster
 from danmaku_pet.config import Config
@@ -18,7 +24,13 @@ from danmaku_pet.models import ActionPlan, AudioClip, Event, VisualCue
 logger = logging.getLogger(__name__)
 
 
-class PerformanceBackend:
+@dataclass(frozen=True, slots=True)
+class PerformanceOutcome:
+    status: Literal["completed", "interrupted", "error"]
+    error: str = ""
+
+
+class LocalPerformanceBackend:
     def __init__(
         self,
         config: Config,
@@ -35,6 +47,7 @@ class PerformanceBackend:
         self._active_event_id: str | None = None
         self._interrupted = False
         self._started_at: float | None = None
+        self._last_error: str | None = None
 
     async def start(self) -> None:
         await self.native.start()
@@ -54,7 +67,7 @@ class PerformanceBackend:
         event: Event,
         audio: AudioClip,
         cue: VisualCue,
-    ) -> None:
+    ) -> PerformanceOutcome:
         self._active_event_id = event.event_id
         self._interrupted = False
         self._started_at = time.time()
@@ -109,6 +122,7 @@ class PerformanceBackend:
                     "ended_at": time.time(),
                 },
             )
+            return PerformanceOutcome("completed")
         except asyncio.CancelledError:
             self.player.stop()
             await self.native.interrupt()
@@ -125,6 +139,7 @@ class PerformanceBackend:
         except Exception as exc:
             self.player.stop()
             await self.native.interrupt()
+            self._last_error = str(exc)
             logger.exception("执行动作失败: %s", exc)
             await self.broadcaster.send(
                 "performance",
@@ -136,6 +151,7 @@ class PerformanceBackend:
                     "ended_at": time.time(),
                 },
             )
+            return PerformanceOutcome("error", str(exc))
         finally:
             self._active_event_id = None
 
@@ -155,4 +171,9 @@ class PerformanceBackend:
             "audio": self.player.status(),
             "active_event_id": self._active_event_id,
             "started_at": self._started_at,
+            "last_error": self._last_error,
         }
+
+
+# Backwards-compatible name for older imports/scripts.
+PerformanceBackend = LocalPerformanceBackend

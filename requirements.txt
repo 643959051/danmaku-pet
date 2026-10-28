@@ -1,13 +1,11 @@
-# Runtime dependencies for the local MVP.
-# Installed only into ./.conda/env by scripts/install.ps1.
-fastapi>=0.115,<1
-uvicorn[standard]>=0.30,<1
-httpx>=0.27,<1
-pydantic>=2.7,<3
-python-dotenv>=1.0,<2
-edge-tts>=7.0,<8
-pygame>=2.6,<3
-PySide6>=6.7,<7
+# 本地开发 / Windows 客户端 / 测试的统一入口。
+# 云端镜像使用 requirements-cloud.txt（不含 PySide6、pygame、edge-tts）。
+-r requirements-client.txt
+
+# 在 Windows 本机跑云端时，zoneinfo 需要一份 IANA 时区库。
+tzdata>=2024.1
+# 本机以 STATE_BACKEND=redis 跑云端时需要 Redis 客户端。
+redis>=5,<6
 
 # Test dependencies
 pytest>=8,<9

@@ -1,0 +1,36 @@
+# 仅用于本地开发联调；正式环境由抖音云控制台创建服务和部署镜像。
+# 构建上下文是仓库根目录，Dockerfile 也在仓库根目录：
+#   docker compose -f deploy/docker-compose.yml up --build
+services:
+  redis:
+    image: redis:7-alpine
+    # 本地联调用的临时 Redis；正式环境用平台提供的 Redis/持久化实例。
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+
+  cloud:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: danmaku-pet-cloud:dev
+    environment:
+      APP_ENV: dev
+      CLOUD_PORT: "8000"
+      # 本地用 mock/wss 都行：mock 不需要客户端，wss 需要开播电脑连上来。
+      GATEWAY_MODE: ${GATEWAY_MODE:-mock}
+      DEFAULT_ROOM_ID: ${DEFAULT_ROOM_ID:-dev-room}
+      ENABLE_TEST_ENDPOINTS: "true"
+      # 本地默认内存状态；想验证无状态路径就改成 redis。
+      STATE_BACKEND: ${STATE_BACKEND:-memory}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # 下面这些通常放在 cloud.env 里；示例文件不含真实密钥。
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      CLIENT_TOKEN: ${CLIENT_TOKEN:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    restart: unless-stopped

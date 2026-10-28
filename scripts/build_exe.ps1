@@ -34,15 +34,8 @@ if (-not (Test-Path $Spec)) {
   throw "找不到打包脚本：$Spec"
 }
 
-# 干净克隆里没有 data/persona.json（被 gitignore），用示例补一份，保证包内人设一致。
-$PersonaExample = Join-Path $Root "data\persona.example.json"
-$Persona = Join-Path $Root "data\persona.json"
-if (-not (Test-Path $Persona) -and (Test-Path $PersonaExample)) {
-  New-Item -ItemType Directory -Force (Split-Path $Persona -Parent) | Out-Null
-  Copy-Item $PersonaExample $Persona
-  Write-Host "已从 data\persona.example.json 生成 data\persona.json"
-}
-
+# 干净克隆里没有 data/persona.json（被 gitignore）。客户端不再需要人设，
+# 人设只存在于云端；这里保留 data 目录只是为了让旧的便携版目录结构兼容。
 # 所有缓存/临时文件都留在工作区内，和 run.ps1 保持一致。
 $env:TEMP = Join-Path $Root "temp\build-temp"
 $env:TMP = $env:TEMP
@@ -71,7 +64,7 @@ Write-Host "开始打包（首次会慢一些，PySide6 体积大）…"
 & $Python -m PyInstaller $Spec --noconfirm --clean --distpath $Dist --workpath $Build
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 
-# 4. 便携目录里放一份配置样例，方便第一次运行前填写 Key
+# 4. 便携目录里放一份客户端配置样例（不含任何密钥）
 $Example = Join-Path $Root ".env.example"
 if (Test-Path $Example) {
   Copy-Item $Example (Join-Path $Output ".env.example") -Force
@@ -84,7 +77,8 @@ $SizeMb = [math]::Round(((Get-ChildItem $Output -Recurse -File | Measure-Object 
 Write-Host ""
 Write-Host "打包完成：$Exe"
 Write-Host "目录大小：$SizeMb MB"
-Write-Host "双击 exe 即可启动；首次会生成 .env / data / temp / assets 等运行目录。"
+Write-Host "双击 exe 即可启动；首次会生成 temp / assets 等运行目录。"
+Write-Host "把 .env.example 复制为 .env 填写 ROOM_ID / CLOUD_URL / CLIENT_TOKEN；本包不含 DeepSeek Key。"
 
 if ($Zip) {
   Push-Location $Root

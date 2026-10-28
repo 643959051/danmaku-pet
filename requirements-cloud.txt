@@ -1,0 +1,11 @@
+# 云端运行时依赖（抖音云 Docker 镜像只安装这一份）。
+# 本地客户端依赖见 requirements-client.txt：云端不装桌面小人、音频和本地 TTS 依赖。
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+pydantic>=2.7,<3
+python-dotenv>=1.0,<2
+# 正式环境房间状态/去重/人设存放在 Redis（平台无状态要求）。
+redis>=5,<6
+# 容器通常没有系统时区库；DISPLAY_TIMEZONE 需要 zoneinfo 数据。
+tzdata>=2024.1

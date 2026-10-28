@@ -5,22 +5,19 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import re
 import time
 from pathlib import Path
 
 from danmaku_pet.models import AudioClip
+from danmaku_pet.shared.plans import estimate_speech_ms
 
 logger = logging.getLogger(__name__)
-
-_SENTENCE_END = re.compile(r"[。！？!?；;，,、\s]+")
 
 
 def estimate_duration_ms(text: str) -> int:
     """Conservative fallback when synthesis or audio-device probing fails."""
 
-    visible = len(_SENTENCE_END.sub("", text or ""))
-    return max(1400, min(15000, 500 + visible * 190))
+    return estimate_speech_ms(text)
 
 
 class EdgeTTSService:
@@ -145,6 +142,16 @@ class AudioPlayer:
             self.last_error = f"音频时长读取失败: {exc}"
             logger.warning(self.last_error)
             return None
+
+    def prepare(self) -> bool:
+        """Initialize the mixer eagerly so the diagnostics page is truthful.
+
+        Without this the first ``/api/status`` would report "音频设备未就绪"
+        even on a perfectly working machine, simply because nothing has been
+        played yet.
+        """
+
+        return self._ensure_mixer()
 
     def _load(self, path: Path):
         key = str(path)

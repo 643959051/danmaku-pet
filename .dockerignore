@@ -1,0 +1,85 @@
+# Docker 构建上下文排除项。
+# Dockerfile 位于仓库根目录，构建上下文就是仓库根目录：
+#   docker build -t danmaku-pet-cloud:dev .
+#
+# 原则：只让镜像真正需要的三样东西进入上下文 ——
+#   requirements-cloud.txt / danmaku_pet/ / data/persona.example.json
+# 其余源码之外的目录、密钥、缓存、日志和打包产物一律排除。
+
+# ========== 密钥与本地配置（绝不进构建上下文/镜像）==========
+.git
+.gitignore
+.gitattributes
+.env
+.env.*
+!.env.example
+.env.cloud
+deploy/cloud.env
+deploy/cloud.env.*
+!deploy/cloud.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets
+secrets.*
+config.local.*
+*.secret
+
+# ========== 依赖与缓存 ==========
+.conda
+.cache
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+.mypy_cache
+.ruff_cache
+.tox
+.nox
+node_modules
+.pytest_cache
+pytest-cache-files-*
+
+# ========== 日志与临时文件 ==========
+temp
+logs
+*.log
+*.log.*
+*.tmp
+*.part
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+
+# ========== 打包与构建产物 ==========
+build
+dist
+release
+out
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.whl
+*.exe
+*.msi
+*.dmg
+
+# ========== 镜像不需要的仓库内容 ==========
+.github
+docs
+tests
+scripts
+packaging
+assets
+vendor
+# data/persona.example.json 是镜像需要的人设种子；只排除运行期人设和本地数据。
+data/persona.json
+data/*.local.json
+data/*.db

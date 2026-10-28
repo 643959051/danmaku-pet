@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the portable DanmakuPet build (onedir).
+"""PyInstaller spec for the portable Windows **client** build (onedir).
+
+The cloud backend runs as a Docker image (``deploy/Dockerfile``); this archive
+only contains the 开播电脑 pieces: local status page, TTS, pygame, dafeiyu, and
+the WebSocket downlink client.  There is no DeepSeek client and no key UI.
 
 The output is a self-contained folder:
 
     dist/DanmakuPet/
         DanmakuPet.exe
-        _internal/...            runtime, PySide6, the web page, the pet assets
-        .env                     created on demand (via the settings page)
+        _internal/...            runtime, PySide6, the status page, pet assets
+        .env                     created on demand (non-secret client settings)
 
 Everything the app writes stays next to the exe (see danmaku_pet/paths.py), so
 the folder can be copied anywhere and deleted without leaving traces behind.
@@ -30,10 +34,8 @@ def add(source: Path, target: str) -> None:
         print(f"[spec] 跳过不存在的资源：{source}", file=sys.stderr)
 
 
-# The management page is served from RESOURCE_ROOT/danmaku_pet/web.
-add(ROOT / "danmaku_pet" / "web", "danmaku_pet/web")
-# Seed persona for a fresh portable folder.
-add(ROOT / "data" / "persona.json", "data")
+# The local status page is served from RESOURCE_ROOT/danmaku_pet/web/client.
+add(ROOT / "danmaku_pet" / "web" / "client", "danmaku_pet/web/client")
 # The desktop pet is executed from these sources at runtime (runpy), so they
 # must stay plain .py files, not bytecode inside the archive.  Only the sources
 # are needed: the npm package also ships a 174 MB prebuilt helper under
@@ -57,9 +59,13 @@ hiddenimports = [
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
     "uvicorn.lifespan.off",
+    # Downlink client (new asyncio implementation of websockets).
     "websockets",
+    "websockets.asyncio",
+    "websockets.asyncio.client",
+    "websockets.asyncio.connection",
     "websockets.legacy",
-    "websockets.legacy.server",
+    "websockets.legacy.client",
     "wsproto",
     "httptools",
     # TTS / audio / config.

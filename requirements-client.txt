@@ -1,0 +1,9 @@
+# 开播电脑 Windows 客户端依赖（PyInstaller 打包与本地源码运行都用这一份）。
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+httpx>=0.27,<1
+pydantic>=2.7,<3
+python-dotenv>=1.0,<2
+edge-tts>=7.0,<8
+pygame>=2.6,<3
+PySide6>=6.7,<7

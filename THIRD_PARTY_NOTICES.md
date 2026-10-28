@@ -6,15 +6,18 @@
 
 | 组件 | 许可证 | 用途 | 本项目如何获得 |
 | --- | --- | --- | --- |
-| [FastAPI](https://github.com/fastapi/fastapi) | MIT | 本地 HTTP / WebSocket 服务 | `pip install`（`requirements.txt`） |
-| [uvicorn](https://github.com/encode/uvicorn) | BSD-3-Clause | ASGI 服务器 | 同上 |
-| [pydantic](https://github.com/pydantic/pydantic) | MIT | 请求 / 响应模型 | 同上 |
-| [httpx](https://github.com/encode/httpx) | BSD-3-Clause | DeepSeek HTTP 客户端 | 同上 |
-| [python-dotenv](https://github.com/theskumar/python-dotenv) | BSD-3-Clause | 读取 `.env` | 同上 |
-| [edge-tts](https://github.com/rany2/edge-tts) | **LGPL-3.0** | 语音合成（在线） | 同上 |
-| [pygame](https://github.com/pygame/pygame) | **LGPL-2.1-or-later** | 音频播放 | 同上 |
-| [PySide6 / Qt for Python](https://doc.qt.io/qtforpython-6/) | **LGPL-3.0**（亦提供 GPL / 商业许可） | 桌面小人窗口（QtCore / QtGui / QtWidgets） | 同上 |
-| [pytest](https://github.com/pytest-dev/pytest) | MIT | 测试（仅开发依赖） | 同上 |
+| [FastAPI](https://github.com/fastapi/fastapi) | MIT | 云端 API / 本地状态页 / WebSocket | `requirements-cloud.txt`、`requirements-client.txt` |
+| [uvicorn](https://github.com/encode/uvicorn) | BSD-3-Clause | ASGI 服务器（两端） | 同上 |
+| [pydantic](https://github.com/pydantic/pydantic) | MIT | 请求/响应与 ActionPlan 模型 | 同上 |
+| [httpx](https://github.com/encode/httpx) | BSD-3-Clause | DeepSeek 与抖音开放平台 HTTP 客户端（云端） | `requirements-cloud.txt` |
+| [python-dotenv](https://github.com/theskumar/python-dotenv) | BSD-3-Clause | 读取本地 `.env` / `.env.cloud` | 同上 |
+| [websockets](https://github.com/python-websockets/websockets) | BSD-3-Clause | WSS 客户端downlink（开发/备用）与 uvicorn WS | `uvicorn[standard]` |
+| [edge-tts](https://github.com/rany2/edge-tts) | **LGPL-3.0** | 语音合成（开播电脑） | `requirements-client.txt` |
+| [pygame](https://github.com/pygame/pygame) | **LGPL-2.1-or-later** | 音频播放（开播电脑） | 同上 |
+| [PySide6 / Qt for Python](https://doc.qt.io/qtforpython-6/) | **LGPL-3.0**（亦提供 GPL / 商业许可） | 桌面小人窗口（QtCore / QtGui / QtWidgets，仅开播电脑） | 同上 |
+| [pytest](https://github.com/pytest-dev/pytest) | MIT | 测试（仅开发依赖） | `requirements.txt` |
+
+**部署边界**：抖音云镜像只安装 `requirements-cloud.txt`，不包含 PySide6、pygame、edge-tts，也不包含桌面小人素材；这些 LGPL 组件只随 Windows 客户端分发。
 
 **打包分发时注意**：`scripts/build_exe.ps1` 产出的便携版是 onedir，LGPL 组件（PySide6 / Qt DLL、edge-tts、pygame）以独立文件形式放在 `_internal/` 中，可以被替换。如果你把这个目录分发出去，请一并附上它们的许可证文本，并保留这些动态库文件不被静态合并。
 

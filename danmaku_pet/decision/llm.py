@@ -8,19 +8,49 @@ import logging
 import time
 from datetime import datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
-from danmaku_pet.config import Config
 from danmaku_pet.decision.context import ConversationMemory
 from danmaku_pet.decision.prompts import build_messages
 from danmaku_pet.decision.validator import normalize_plan
-from danmaku_pet.models import ActionPlan, DecisionResult, Event
 from danmaku_pet.persona import Persona
+from danmaku_pet.shared.events import Event
+from danmaku_pet.shared.plans import ActionPlan, DecisionResult
 
 logger = logging.getLogger(__name__)
 
 _TIME_KEYWORDS = ("几点", "时间", "日期", "几号", "星期几", "周几", "今天")
+
+
+class LLMSettings(Protocol):
+    """The slice of cloud config the decision engine needs (keeps it decoupled)."""
+
+    deepseek_api_key: str
+    deepseek_base_url: str
+    deepseek_model: str
+    llm_timeout_s: float
+    persona: Persona
+    display_timezone: str
+
+    @property
+    def effective_llm_mode(self) -> str: ...
+
+
+def local_now(timezone_name: str = "") -> datetime:
+    """The streamer's local time.
+
+    The container usually runs in UTC; the answer to "现在几点了" must still be
+    the 主播's clock, so the cloud config carries an IANA timezone name.
+    """
+
+    if timezone_name:
+        try:
+            return datetime.now(ZoneInfo(timezone_name))
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning("未知时区 %r，回退到进程本地时区", timezone_name)
+    return datetime.now().astimezone()
 
 
 class DecisionError(RuntimeError):
@@ -77,7 +107,7 @@ class DeepSeekEngine:
 
     def __init__(
         self,
-        config: Config,
+        config: LLMSettings,
         *,
         http_client: httpx.AsyncClient | None = None,
         persona: Persona | None = None,
@@ -86,6 +116,7 @@ class DeepSeekEngine:
             raise DecisionError("LLM_MODE=deepseek 但未配置 DEEPSEEK_API_KEY")
         self.config = config
         self.persona = persona or getattr(config, "persona", Persona())
+        self.timezone_name = getattr(config, "display_timezone", "") or ""
         self._owns_client = http_client is None
         self._client = http_client or httpx.AsyncClient(
             timeout=httpx.Timeout(config.llm_timeout_s, connect=5.0),
@@ -126,7 +157,12 @@ class DeepSeekEngine:
     async def decide(self, event: Event, memory: ConversationMemory) -> DecisionResult:
         payload = {
             "model": self.config.deepseek_model,
-            "messages": build_messages(event, memory.messages(), self.persona),
+            "messages": build_messages(
+                event,
+                memory.messages(),
+                self.persona,
+                now=local_now(self.timezone_name),
+            ),
             "temperature": 0.85,
             "max_tokens": 220,
             "stream": False,
@@ -159,8 +195,9 @@ class MockDecisionEngine:
 
     name = "mock"
 
-    def __init__(self, persona: Persona | None = None) -> None:
+    def __init__(self, persona: Persona | None = None, timezone_name: str = "") -> None:
         self.persona = persona or Persona()
+        self.timezone_name = timezone_name
 
     _RULES: tuple[tuple[tuple[str, ...], str, str, str], ...] = (
         (("转", "圈", "旋转"), "惊不惊喜！看我的转圈！", "surprised", "spin"),
@@ -177,8 +214,8 @@ class MockDecisionEngine:
         await asyncio.sleep(0.05)
         text = event.text.lower()
         if any(keyword in text for keyword in _TIME_KEYWORDS):
-            # 本地模拟也要能回答时间类问题，用本机时间直接报，别让观众自己看表。
-            now = datetime.now().astimezone()
+            # 本地模拟也要能回答时间类问题，用主播时区直接报，别让观众自己看表。
+            now = local_now(self.timezone_name)
             weekday = "一二三四五六日"[now.weekday()]
             reply = f"现在是 {now:%H:%M}，{now:%m月%d日} 周{weekday}。"
             emotion, motion = "neutral", "nod"
@@ -209,8 +246,9 @@ class MockDecisionEngine:
         return None
 
 
-def build_engine(config: Config) -> DecisionEngine:
+def build_engine(config: LLMSettings) -> DecisionEngine:
     persona = getattr(config, "persona", Persona())
+    timezone_name = getattr(config, "display_timezone", "") or ""
     if config.effective_llm_mode == "deepseek":
         return DeepSeekEngine(config, persona=persona)
-    return MockDecisionEngine(persona=persona)
+    return MockDecisionEngine(persona=persona, timezone_name=timezone_name)

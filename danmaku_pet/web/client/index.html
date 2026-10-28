@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>弹幕宠物 · 开播客户端</title>
+<style>
+  :root {
+    --bg: #0d1220; --panel: #161d2d; --panel2: #1d2638; --line: #2a354b;
+    --text: #e7ecf6; --muted: #93a1bb; --accent: #63b3ff; --ok: #4ade80;
+    --warn: #fbbf24; --bad: #f87171; --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: #111827; position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.ok { color: var(--ok); border-color: #23633f; }
+  .chip.warn { color: var(--warn); border-color: #6b5520; }
+  .chip.bad { color: var(--bad); border-color: #6b2a2a; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; padding: 16px 20px 40px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit; }
+  button { background: #24344d; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1d4f7a; border-color: #2f6b9e; }
+  button.bad { background: #5a2323; border-color: #7e3030; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .row > * { flex: 1 1 120px; }
+  .row > button { flex: 0 0 auto; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed #233047; font-size: 13px; }
+  .kv span:first-child { color: var(--muted); }
+  .kv span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+  .problems { margin: 0; padding-left: 18px; }
+  .problems li { color: var(--warn); margin: 3px 0; }
+  .problems li.bad { color: var(--bad); }
+  .list { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .item { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .item .meta { color: var(--muted); font-size: 12px; }
+  .muted { color: var(--muted); }
+  .t-bad { color: var(--bad); } .t-ok { color: var(--ok); } .t-warn { color: var(--warn); }
+  .big { font-size: 20px; font-weight: 600; }
+  .toast { position: fixed; right: 18px; bottom: 18px; background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 8px; max-width: 420px; z-index: 60; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>弹幕宠物 · 开播客户端</h1>
+  <span class="chip" id="cRoom">房间 -</span>
+  <span class="chip" id="cConn">连接 -</span>
+  <span class="chip" id="cPet">桌宠 -</span>
+  <span class="chip" id="cAudio">音频 -</span>
+  <span style="flex:1"></span>
+  <span class="muted mono" id="clock"></span>
+  <button id="btnReconnect">重新连接</button>
+  <button class="bad" id="btnStop">一键停止</button>
+</header>
+
+<main>
+  <section class="wide" id="problemsCard">
+    <h2>诊断</h2>
+    <ul class="problems" id="problems"></ul>
+  </section>
+
+  <section>
+    <h2>云端连接</h2>
+    <div class="kv"><span>状态</span><span id="connState" class="big">-</span></div>
+    <div class="kv"><span>云端地址</span><span id="connUrl" class="mono">-</span></div>
+    <div class="kv"><span>协议版本</span><span id="connProto">-</span></div>
+    <div class="kv"><span>已连接时长</span><span id="connSince">-</span></div>
+    <div class="kv"><span>重连次数</span><span id="connRetries">-</span></div>
+    <div class="kv"><span>待发回执</span><span id="connOutbox">-</span></div>
+    <div class="kv"><span>最近错误</span><span id="connError" class="t-bad">-</span></div>
+  </section>
+
+  <section>
+    <h2>房间绑定</h2>
+    <div class="kv"><span>当前 room_id</span><span id="bindRoom" class="mono">-</span></div>
+    <div class="kv"><span>client_id</span><span id="bindClient" class="mono">-</span></div>
+    <label for="inRoom">修改 room_id</label>
+    <input id="inRoom" placeholder="直播间 room_id" />
+    <label for="inUrl">修改云端地址</label>
+    <input id="inUrl" placeholder="ws://host:port/ws/client" />
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnBind">保存并重连</button>
+    </div>
+    <p class="muted">只写入非敏感项（ROOM_ID / CLOUD_URL）。客户端令牌请通过启动参数或环境变量提供。</p>
+  </section>
+
+  <section>
+    <h2>当前表演</h2>
+    <div class="kv"><span>指令</span><span id="curId" class="mono">-</span></div>
+    <div class="kv"><span>动作 / 情绪</span><span id="curMotion">-</span></div>
+    <div class="kv"><span>要说的台词</span><span id="curSpeech">-</span></div>
+    <div class="kv"><span>动作保持</span><span id="curHold">-</span></div>
+    <div class="kv"><span>队列</span><span id="curQueue">-</span></div>
+  </section>
+
+  <section>
+    <h2>语音与音频设备</h2>
+    <div class="kv"><span>TTS 引擎</span><span id="ttsEngine">-</span></div>
+    <div class="kv"><span>声音</span><span id="ttsVoice">-</span></div>
+    <div class="kv"><span>最近音频</span><span id="ttsAudio" class="mono">-</span></div>
+    <div class="kv"><span>pygame mixer</span><span id="audioMixer">-</span></div>
+    <div class="kv"><span>音频错误</span><span id="audioError" class="t-bad">-</span></div>
+    <div class="kv"><span>TTS 错误</span><span id="ttsError" class="t-bad">-</span></div>
+  </section>
+
+  <section>
+    <h2>桌面小人 helper</h2>
+    <div class="kv"><span>状态</span><span id="petState">-</span></div>
+    <div class="kv"><span>进程</span><span id="petPid" class="mono">-</span></div>
+    <div class="kv"><span>helper 路径</span><span id="petPath" class="mono">-</span></div>
+    <div class="kv"><span>最近错误</span><span id="petError" class="t-bad">-</span></div>
+  </section>
+
+  <section class="wide">
+    <h2>最近回执</h2>
+    <div class="list" id="results"></div>
+  </section>
+
+  <section class="wide">
+    <h2>最近错误</h2>
+    <div class="list" id="errors"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  let status = null;
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString("zh-CN", {hour12:false}) : "-";
+  const setText = (id, value) => { const node = $(id); if (node) node.textContent = value === undefined || value === null || value === "" ? "-" : String(value); };
+
+  function toast(message, bad = false) {
+    const node = $("toast");
+    node.textContent = message;
+    node.style.borderLeftColor = bad ? "var(--bad)" : "var(--accent)";
+    node.classList.remove("hidden");
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => node.classList.add("hidden"), 4000);
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, Object.assign({headers: {"Content-Type": "application/json"}}, options));
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {detail: text}; }
+    if (!response.ok) throw new Error(data.detail || response.statusText);
+    return data;
+  }
+
+  function badge(id, text, kind) {
+    const node = $(id);
+    node.textContent = text;
+    node.className = `chip ${kind || ""}`;
+  }
+
+  function render() {
+    if (!status) return;
+    const conn = status.connection || {};
+    const cfg = status.config || {};
+    const executor = status.executor || {};
+    const backend = executor.backend || {};
+    const pet = backend.desktop_pet || {};
+    const audio = backend.audio || {};
+    const tts = executor.tts || {};
+    const dispatcher = status.dispatcher || {};
+    const diag = status.diagnostics || {};
+
+    badge("cRoom", `房间 ${cfg.room_id || "未绑定"}`, cfg.room_id ? "" : "bad");
+    const state = conn.state || "idle";
+    badge("cConn", `连接 ${state}`, state === "online" ? "ok" : (state === "reconnecting" ? "warn" : "bad"));
+    badge("cPet", `桌宠 ${pet.state || "-"}`, pet.state === "ready" ? "ok" : (cfg.desktop_pet_enabled ? "warn" : "bad"));
+    badge("cAudio", `音频 ${audio.mixer_ready ? "就绪" : "未就绪"}`, audio.mixer_ready ? "ok" : "bad");
+
+    const problems = (diag.problems || []);
+    const list = $("problems");
+    list.innerHTML = "";
+    if (!problems.length) {
+      const li = document.createElement("li");
+      li.className = "t-ok";
+      li.textContent = "没有发现明显问题。";
+      list.appendChild(li);
+    }
+    problems.forEach((text) => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      list.appendChild(li);
+    });
+
+    setText("connState", state);
+    setText("connUrl", conn.cloud_url);
+    setText("connProto", `v${conn.protocol_version || "?"} · ${(conn.transport || {}).mode || cfg.transport || "?"}`);
+    if (conn.connected_at) {
+      const seconds = Math.max(0, Math.round(Date.now() / 1000 - conn.connected_at));
+      setText("connSince", `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`);
+    } else setText("connSince", "-");
+    setText("connRetries", conn.reconnects);
+    setText("connOutbox", conn.outbox);
+    setText("connError", conn.last_error || "无");
+
+    setText("bindRoom", cfg.room_id || "未绑定");
+    setText("bindClient", cfg.client_id);
+    if (!$("inRoom").value) $("inRoom").value = cfg.room_id || "";
+    if (!$("inUrl").value) $("inUrl").value = conn.cloud_url || cfg.cloud_url || "";
+
+    const current = dispatcher.current || (executor.current_command || null);
+    setText("curId", current ? current.command_id : "-");
+    setText("curMotion", current ? `${current.motion || (current.plan && current.plan.motion) || "-"} / ${current.emotion || (current.plan && current.plan.emotion) || "-"}` : "-");
+    setText("curSpeech", executor.last_speech_text || (current && current.plan ? current.plan.reply : "-"));
+    setText("curHold", executor.last_audio ? `${executor.last_audio.duration_ms} ms` : "-");
+    setText("curQueue", (dispatcher.queue || []).length);
+    setText("ttsEngine", tts.engine);
+    setText("ttsVoice", tts.voice);
+    if (executor.last_audio) {
+      setText("ttsAudio", `${executor.last_audio.duration_ms}ms · ${executor.last_audio.cached ? "缓存" : "新合成"} · ${executor.last_audio.path || "（静音）"}`);
+    } else setText("ttsAudio", "-");
+    setText("audioMixer", audio.mixer_ready ? "已初始化" : "未初始化");
+    setText("audioError", audio.last_error || "无");
+    setText("ttsError", tts.last_error || "无");
+
+    setText("petState", pet.enabled === false ? "已禁用" : pet.state);
+    setText("petPid", pet.pid || "-");
+    setText("petPath", pet.helper);
+    setText("petError", pet.last_error || "无");
+
+    const results = $("results");
+    results.innerHTML = "";
+    (dispatcher.recent_results || []).forEach((item) => {
+      const node = document.createElement("div");
+      node.className = "item";
+      const cls = item.status === "completed" ? "t-ok" : (item.status === "error" ? "t-bad" : "t-warn");
+      node.innerHTML = `<div class="meta">${esc(fmtTime(item.updated_at))} · <span class="${cls}">${esc(item.status)}</span> · ${esc(item.command_id)}</div>
+        <div class="meta">${esc(item.room_id)} · 语音 ${item.speech_ms}ms ${item.error_code ? "· " + esc(item.error_code) : ""}</div>
+        ${item.error_message ? `<div class="t-bad">${esc(item.error_message)}</div>` : ""}`;
+      results.appendChild(node);
+    });
+    if (!results.childElementCount) results.innerHTML = `<p class="muted">还没有回执。</p>`;
+
+    const errors = $("errors");
+    errors.innerHTML = "";
+    (diag.recent_errors || []).forEach((item) => {
+      const node = document.createElement("div");
+      node.className = "item";
+      node.innerHTML = `<div class="meta">${esc(fmtTime(item.at))} · ${esc(item.source)}</div><div class="t-bad">${esc(item.message)}</div>`;
+      errors.appendChild(node);
+    });
+    if (!errors.childElementCount) errors.innerHTML = `<p class="muted">没有记录到错误。</p>`;
+  }
+
+  async function refresh() {
+    status = await api("/api/status");
+    render();
+  }
+
+  $("btnStop").onclick = async () => {
+    try { await api("/api/interrupt", {method: "POST", body: "{}"}); toast("已停止当前表演"); await refresh(); }
+    catch (err) { toast(err.message, true); }
+  };
+  $("btnReconnect").onclick = async () => {
+    try { await api("/api/reconnect", {method: "POST", body: "{}"}); toast("正在重新连接"); await refresh(); }
+    catch (err) { toast(err.message, true); }
+  };
+  $("btnBind").onclick = async () => {
+    try {
+      const data = await api("/api/bind", {method: "POST", body: JSON.stringify({
+        room_id: $("inRoom").value.trim() || null,
+        cloud_url: $("inUrl").value.trim() || null,
+      })});
+      toast((data.warnings || []).join("；") || `已绑定 ${data.room_id}，正在重连`);
+      await refresh();
+    } catch (err) { toast(err.message, true); }
+  };
+
+  refresh().catch((err) => toast(err.message, true));
+  setInterval(() => { if (document.visibilityState === "visible") refresh().catch(() => {}); }, 2500);
+  setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("zh-CN", {hour12:false}); }, 1000);
+})();
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 .cache/
 .env
 .env.tmp
+.env.cloud
 data/persona.json
 temp/
 assets/tts_cache/

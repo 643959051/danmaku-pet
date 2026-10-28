@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>弹幕宠物 · 云端管理端</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171e2e; --panel2: #1e2739; --line: #2b364c;
+    --text: #e6ebf5; --muted: #93a1bb; --accent: #63b3ff; --ok: #4ade80;
+    --warn: #fbbf24; --bad: #f87171; --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: #121929; position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; }
+  .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.ok { color: var(--ok); border-color: #23633f; }
+  .chip.bad { color: var(--bad); border-color: #6b2a2a; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; padding: 16px 20px 40px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  section.wide { grid-column: 1 / -1; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select, textarea { width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit; }
+  textarea { min-height: 64px; resize: vertical; }
+  button { background: #24344d; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1d4f7a; border-color: #2f6b9e; }
+  button.bad { background: #5a2323; border-color: #7e3030; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .row > * { flex: 1 1 120px; }
+  .row > button { flex: 0 0 auto; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed #233047; font-size: 13px; }
+  .kv span:first-child { color: var(--muted); }
+  .kv span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+  .list { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .item { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  .item .meta { color: var(--muted); font-size: 12px; }
+  .feed { max-height: 280px; overflow: auto; font-family: Consolas, monospace; font-size: 12px; background: #101623; border-radius: 8px; padding: 8px; }
+  .feed div { padding: 2px 0; border-bottom: 1px solid #1a2333; overflow-wrap: anywhere; }
+  .t-warn { color: var(--warn); } .t-bad { color: var(--bad); } .t-ok { color: var(--ok); } .t-muted { color: var(--muted); }
+  .gate { position: fixed; inset: 0; background: rgba(8, 12, 20, .93); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .gate .box { width: min(420px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
+  .gate h2 { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 16px; }
+  .hidden { display: none !important; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #223049; color: var(--muted); }
+  .tag.high { background: #4a2b17; color: #f6b26b; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #233047; }
+  th { color: var(--muted); font-weight: 500; }
+  .muted { color: var(--muted); }
+  .toast { position: fixed; right: 18px; bottom: 18px; background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 8px; max-width: 420px; z-index: 60; }
+</style>
+</head>
+<body>
+<div id="gate" class="gate">
+  <div class="box">
+    <h2>云端管理端</h2>
+    <p class="muted">输入抖音云密钥管理中配置的 ADMIN_TOKEN。令牌只保存在本标签页，不会写进 URL。</p>
+    <label for="token">ADMIN_TOKEN</label>
+    <input id="token" type="password" autocomplete="off" placeholder="粘贴管理令牌" />
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="enter">进入</button>
+    </div>
+    <p class="t-bad" id="gateError"></p>
+    <p class="muted mono" id="gateHint"></p>
+  </div>
+</div>
+
+<header>
+  <h1>弹幕宠物 · 云端</h1>
+  <span class="chip" id="cEnv">环境</span>
+  <span class="chip" id="cGateway">网关</span>
+  <span class="chip" id="cLlm">LLM</span>
+  <span class="chip" id="cHealth">健康</span>
+  <span class="chip" id="cRooms">房间 0</span>
+  <span class="chip" id="cClients">客户端 0</span>
+  <span style="flex:1"></span>
+  <span class="muted mono" id="clock"></span>
+  <button id="logout">退出</button>
+</header>
+
+<main>
+  <section>
+    <h2>当前房间</h2>
+    <div class="row">
+      <div>
+        <label for="roomSelect">已绑定房间</label>
+        <select id="roomSelect"></select>
+      </div>
+      <div>
+        <label for="roomInput">新建 / 指定 room_id</label>
+        <input id="roomInput" placeholder="例如 7123456789" />
+      </div>
+      <button id="useRoom">使用</button>
+    </div>
+    <div id="roomFacts"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnPause">暂停插件</button>
+      <button id="btnAuto">自动回复：关</button>
+      <button class="bad" id="btnInterrupt">立刻打断</button>
+      <button id="btnClear">清空上下文</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>模拟互动（仅开发/联调环境）</h2>
+    <div class="grid2">
+      <div>
+        <label for="mText">评论内容</label>
+        <input id="mText" value="小鱼，你好呀，挥挥手" />
+      </div>
+      <div>
+        <label for="mUser">观众昵称</label>
+        <input id="mUser" value="验收观众" />
+      </div>
+      <div>
+        <label for="gName">礼物名称</label>
+        <input id="gName" value="嘉年华" />
+      </div>
+      <div>
+        <label for="gId">礼物 ID（可选）</label>
+        <input id="gId" placeholder="平台 gift_id" />
+      </div>
+      <div>
+        <label for="gCount">数量</label>
+        <input id="gCount" type="number" min="1" value="1" />
+      </div>
+      <div>
+        <label for="gUser">送礼观众</label>
+        <input id="gUser" value="礼物验收" />
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnManual">发送模拟评论</button>
+      <button class="primary" id="btnGift">发送模拟礼物</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div>
+        <label for="simInterval">模拟间隔（秒）</label>
+        <input id="simInterval" type="number" min="0.8" max="60" step="0.1" value="4" />
+      </div>
+      <div>
+        <label for="simScenario">场景</label>
+        <select id="simScenario">
+          <option value="mixed">混合</option>
+          <option value="chat">仅评论</option>
+          <option value="gift">仅礼物</option>
+        </select>
+      </div>
+      <button id="btnSimStart">启动循环</button>
+      <button class="bad" id="btnSimStop">停止循环</button>
+    </div>
+    <p class="muted" id="testHint"></p>
+  </section>
+
+  <section>
+    <h2>抖音互动数据任务</h2>
+    <div class="kv"><span>评论任务</span><span id="taskComment">未启动</span></div>
+    <div class="kv"><span>礼物任务</span><span id="taskGift">未启动</span></div>
+    <div class="kv"><span>平台校验模式</span><span id="verifyMode">-</span></div>
+    <div class="kv"><span>平台消息计数</span><span id="rxCounts">-</span></div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnTaskComment">启动评论任务</button>
+      <button id="btnTaskGift">启动礼物任务</button>
+      <button class="bad" id="btnTaskStop">全部停止</button>
+    </div>
+    <p class="muted">任务接口路径和字段以抖音开放平台最新文档为准；未配置时这里会明确报错。</p>
+  </section>
+
+  <section>
+    <h2>待回复弹幕</h2>
+    <div class="list" id="pendingList"></div>
+  </section>
+
+  <section class="wide">
+    <h2>最近决策 / 回执</h2>
+    <div class="list" id="recentList" style="max-height:320px"></div>
+  </section>
+
+  <section>
+    <h2>角色语气</h2>
+    <label for="pName">角色名</label><input id="pName" maxlength="20" />
+    <label for="pIdentity">身份设定</label><textarea id="pIdentity" maxlength="200"></textarea>
+    <label for="pTone">语气风格</label><input id="pTone" maxlength="120" />
+    <label for="pCatch">口头禅</label><input id="pCatch" maxlength="80" />
+    <label for="pLength">回复长度</label>
+    <select id="pLength">
+      <option value="short">短句</option>
+      <option value="medium">适中</option>
+      <option value="long">稍长</option>
+    </select>
+    <label><input type="checkbox" id="pEmoji" style="width:auto" /> 允许少量 emoji</label>
+    <label for="pRules">补充规则</label><textarea id="pRules" maxlength="600"></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnPersona">保存角色</button>
+      <button id="btnPrompt">查看提示词</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>网关与指标</h2>
+    <div class="kv"><span>下行模式</span><span id="gwMode">-</span></div>
+    <div class="kv"><span>已连接房间</span><span id="gwRooms">-</span></div>
+    <div class="kv"><span>发送 / 失败</span><span id="gwCounts">-</span></div>
+    <table style="margin-top:10px">
+      <thead><tr><th>阶段</th><th>次数</th><th>平均 ms</th><th>最大 ms</th></tr></thead>
+      <tbody id="stageBody"></tbody>
+    </table>
+    <div class="kv"><span>计数器</span><span id="counters" class="mono">-</span></div>
+  </section>
+
+  <section class="wide">
+    <h2>实时事件</h2>
+    <div class="feed" id="feed"></div>
+  </section>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(() => {
+  const TOKEN_KEY = "danmaku.cloud.adminToken";
+  let token = sessionStorage.getItem(TOKEN_KEY) || "";
+  let status = null;
+  let roomId = "";
+  let socket = null;
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString("zh-CN", {hour12:false}) : "-";
+  const fmtMs = (ms) => (ms === null || ms === undefined) ? "-" : `${Math.round(ms)} ms`;
+
+  function toast(message, bad = false) {
+    const node = $("toast");
+    node.textContent = message;
+    node.style.borderLeftColor = bad ? "var(--bad)" : "var(--accent)";
+    node.classList.remove("hidden");
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => node.classList.add("hidden"), 4200);
+  }
+
+  async function api(path, options = {}) {
+    const headers = Object.assign({"Content-Type": "application/json"}, token ? {Authorization: `Bearer ${token}`} : {});
+    const response = await fetch(path, Object.assign({}, options, {headers}));
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (e) { data = {detail: text}; }
+    if (response.status === 401) {
+      showGate("令牌无效或已过期");
+      throw new Error("未授权");
+    }
+    if (!response.ok) throw new Error(data.detail || response.statusText);
+    return data;
+  }
+
+  // ---------------------------------------------------------------- token gate
+  function showGate(message = "") {
+    $("gate").classList.remove("hidden");
+    $("gateError").textContent = message;
+  }
+  function hideGate() { $("gate").classList.add("hidden"); }
+
+  $("enter").onclick = async () => {
+    token = $("token").value.trim();
+    if (!token) { $("gateError").textContent = "请输入令牌"; return; }
+    sessionStorage.setItem(TOKEN_KEY, token);
+    try {
+      await refresh();
+      hideGate();
+      connectSocket();
+    } catch (err) {
+      $("gateError").textContent = err.message;
+    }
+  };
+  $("token").addEventListener("keydown", (event) => { if (event.key === "Enter") $("enter").click(); });
+  $("logout").onclick = () => {
+    sessionStorage.removeItem(TOKEN_KEY);
+    token = "";
+    if (socket) { socket.close(); socket = null; }
+    showGate();
+  };
+
+  // ------------------------------------------------------------------- socket
+  function connectSocket() {
+    if (!token) return;
+    if (socket) { try { socket.close(); } catch (e) {} }
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    socket = new WebSocket(`${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`);
+    socket.onmessage = (event) => {
+      let payload;
+      try { payload = JSON.parse(event.data); } catch (e) { return; }
+      if (payload.type === "snapshot") { status = payload.data; render(); return; }
+      if (["plan", "command", "result", "notice", "dropped", "entry", "client", "auto_reply", "douyin_task"].includes(payload.type)) {
+        feedLine(payload.type, payload.data);
+      }
+      if (payload.type === "status") { if (status && payload.data.room) mergeRoom(payload.data.room); renderRoom(); }
+    };
+    socket.onclose = () => { socket = null; setTimeout(() => { if (token && document.visibilityState === "visible") connectSocket(); }, 4000); };
+  }
+
+  function feedLine(type, data) {
+    const feed = $("feed");
+    let text = "";
+    if (type === "plan") text = `[决策] ${data.room_id} ${data.decision_source} · ${data.plan?.motion} · ${data.plan?.reply}`;
+    else if (type === "command") text = `[下发] ${data.room_id} ${data.gateway_mode} · ${data.command?.command_id}`;
+    else if (type === "result") text = `[回执] ${data.room_id} ${data.result?.status} · ${data.result?.command_id}`;
+    else if (type === "dropped") text = `[丢弃] ${data.room_id} ${data.reason}`;
+    else if (type === "entry") text = `[事件] ${data.room_id} ${data.entry?.status}`;
+    else if (type === "notice") text = `[${data.level || "info"}] ${data.room_id || ""} ${data.message}`;
+    else if (type === "client") text = `[客户端] ${data.event} ${data.client_id} · ${data.room_id}`;
+    else if (type === "auto_reply") text = `[自动回复] ${data.room_id} -> ${data.enabled}`;
+    else if (type === "douyin_task") text = `[平台任务] ${data.room_id} ${data.kind} -> ${data.status}`;
+    else text = `[${type}] ${JSON.stringify(data).slice(0, 200)}`;
+    const row = document.createElement("div");
+    row.textContent = `${new Date().toLocaleTimeString("zh-CN", {hour12:false})} ${text}`;
+    feed.prepend(row);
+    while (feed.childElementCount > 140) feed.lastElementChild.remove();
+  }
+
+  function mergeRoom(room) {
+    if (!status || !status.orchestrator) return;
+    const rooms = status.orchestrator.rooms || [];
+    const index = rooms.findIndex((item) => item.room_id === room.room_id);
+    if (index >= 0) rooms[index] = room; else rooms.push(room);
+    status.orchestrator.rooms = rooms;
+  }
+
+  // ------------------------------------------------------------------- render
+  function render() {
+    if (!status) return;
+    const cfg = status.config || {};
+    const orch = status.orchestrator || {};
+    const app = status.app || {};
+    $("cEnv").textContent = `环境 ${cfg.environment || "-"}`;
+    $("cEnv").className = `chip ${cfg.environment === "prod" ? "ok" : ""}`;
+    $("cGateway").textContent = `网关 ${cfg.gateway_mode || "-"}`;
+    $("cLlm").textContent = `LLM ${cfg.llm_mode || "-"}`;
+    $("cLlm").className = `chip ${cfg.llm_mode === "deepseek" ? "ok" : ""}`;
+    const health = $("cHealth");
+    health.textContent = "健康";
+    health.className = "chip ok";
+    $("cRooms").textContent = `房间 ${(orch.rooms || []).length}`;
+    $("cClients").textContent = `客户端 ${(orch.sessions || []).length}`;
+    $("clock").textContent = fmtTime(app.now || Date.now() / 1000);
+    $("testHint").textContent = cfg.test_endpoints
+      ? "测试接口已开启（ADMIN_TOKEN 鉴权）。正式环境应设置 ENABLE_TEST_ENDPOINTS=false。"
+      : "测试接口已关闭：正式环境只接受平台推送。";
+
+    // rooms select
+    const select = $("roomSelect");
+    const ids = (orch.rooms || []).map((room) => room.room_id);
+    const previous = roomId || select.value;
+    select.innerHTML = "";
+    if (!ids.length) {
+      const option = document.createElement("option");
+      option.value = ""; option.textContent = "（尚无房间）";
+      select.appendChild(option);
+    }
+    ids.forEach((id) => {
+      const option = document.createElement("option");
+      option.value = id; option.textContent = id;
+      select.appendChild(option);
+    });
+    if (previous && ids.includes(previous)) select.value = previous;
+    roomId = select.value || roomId;
+
+    // gateway
+    const gateway = orch.gateway || {};
+    $("gwMode").textContent = `${gateway.mode || "-"} / 生效 ${gateway.active || "-"}`;
+    const ws = gateway.ws || {};
+    $("gwRooms").textContent = (ws.connected_rooms || []).join("、") || "无";
+    const parts = [];
+    if (ws.sent !== undefined) parts.push(`WS 发 ${ws.sent} 失败 ${ws.failed}`);
+    if (gateway.mock) parts.push(`Mock 发 ${gateway.mock.sent}`);
+    if (gateway.douyin_cloud) parts.push(`云网关 发 ${gateway.douyin_cloud.sent} 失败 ${gateway.douyin_cloud.failed}`);
+    $("gwCounts").textContent = parts.join(" · ") || "-";
+    $("gwCounts").className = `mono ${gateway.last_error ? "t-bad" : ""}`;
+    $("gwMode").title = gateway.last_error || "";
+
+    const metrics = orch.metrics || {};
+    const body = $("stageBody");
+    body.innerHTML = "";
+    Object.entries(metrics.stages || {}).forEach(([name, stats]) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${esc(name)}</td><td>${stats.count}</td><td>${stats.avg_ms}</td><td>${stats.max_ms}</td>`;
+      body.appendChild(tr);
+    });
+    $("counters").textContent = Object.entries(metrics.counters || {}).map(([k, v]) => `${k}=${v}`).join("  ") || "-";
+
+    // receiver / tasks
+    const receiver = status.receiver || {};
+    $("verifyMode").textContent = receiver.verify_mode || "-";
+    $("rxCounts").textContent = Object.entries(receiver.counts || {}).map(([k, v]) => `${k}=${v}`).join(" ");
+    const tasks = status.douyin_tasks || [];
+    $("taskComment").textContent = taskText(tasks, "comment");
+    $("taskGift").textContent = taskText(tasks, "gift");
+
+    // persona (only fill when empty to avoid clobbering edits)
+    const persona = cfg.persona || {};
+    if (!$("pName").value) {
+      $("pName").value = persona.name || "";
+      $("pIdentity").value = persona.identity || "";
+      $("pTone").value = persona.tone || "";
+      $("pCatch").value = persona.catchphrase || "";
+      $("pLength").value = persona.reply_length || "short";
+      $("pEmoji").checked = !!persona.emoji;
+      $("pRules").value = persona.rules || "";
+    }
+    renderRoom();
+  }
+
+  function taskText(tasks, kind) {
+    const task = tasks.find((item) => item.kind === kind);
+    if (!task) return "未启动";
+    return `${task.status}${task.task_id ? " · " + task.task_id : ""}${task.error ? " · " + task.error : ""}`;
+  }
+
+  function renderRoom() {
+    if (!status) return;
+    const rooms = (status.orchestrator && status.orchestrator.rooms) || [];
+    const room = rooms.find((item) => item.room_id === roomId) || null;
+    const facts = $("roomFacts");
+    facts.innerHTML = "";
+    if (!room) {
+      facts.innerHTML = `<p class="muted">选择或创建一个房间后，可查看队列、待回复弹幕和回执。</p>`;
+      $("pendingList").innerHTML = "";
+      $("recentList").innerHTML = "";
+      return;
+    }
+    $("btnPause").textContent = room.paused ? "恢复插件" : "暂停插件";
+    $("btnAuto").textContent = `自动回复：${room.auto_reply ? "开" : "关"}`;
+    $("btnAuto").className = room.auto_reply ? "primary" : "";
+    const rows = [
+      ["状态", room.paused ? "已暂停" : (room.idle ? "空闲" : "运行中")],
+      ["队列", `${room.queue?.pending || 0} / ${room.queue?.maxsize || 0}`],
+      ["待回复", String((room.pending || []).length)],
+      ["上下文轮数", String(room.memory_rounds || 0)],
+      ["收到 / 完成", `${room.stats?.received || 0} / ${room.stats?.completed || 0}`],
+      ["打断 / 错误 / 超时", `${room.stats?.interrupted || 0} / ${room.stats?.errors || 0} / ${room.stats?.timeouts || 0}`],
+      ["当前指令", room.current_command_id || "-"],
+      ["客户端", (room.clients || []).map((c) => `${c.client_id}（${c.last_result_status || "等待"}）`).join("、") || "未连接"],
+    ];
+    facts.innerHTML = rows.map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
+
+    const pending = $("pendingList");
+    pending.innerHTML = "";
+    (room.pending || []).forEach((item) => {
+      const event = item.event;
+      const node = document.createElement("div");
+      node.className = "item";
+      node.innerHTML = `<div class="meta">${esc(event.user)} · 等待 ${item.waiting_seconds}s · ${esc(fmtTime(event.timestamp))}</div>
+        <div>${esc(event.display_text || event.text)}</div>`;
+      const button = document.createElement("button");
+      button.textContent = "回复这条";
+      button.style.marginTop = "6px";
+      button.onclick = () => act(() => api(`/api/rooms/${encodeURIComponent(room.room_id)}/reply`, {method: "POST", body: JSON.stringify({event_id: event.event_id})}), "已提交回复");
+      node.appendChild(button);
+      pending.appendChild(node);
+    });
+    if (!pending.childElementCount) pending.innerHTML = `<p class="muted">没有待回复弹幕。</p>`;
+
+    const recent = $("recentList");
+    recent.innerHTML = "";
+    (room.recent || []).forEach((entry) => {
+      const plan = entry.plan;
+      const node = document.createElement("div");
+      node.className = "item";
+      const tag = plan && plan.priority === "high" ? `<span class="tag high">礼物</span>` : "";
+      node.innerHTML = `<div class="meta">${esc(fmtTime(entry.started_at))} · ${esc(entry.event.user)} · ${esc(entry.decision_source)} · ${esc(entry.status)} ${tag}</div>
+        <div>${esc(entry.event.display_text || entry.event.text)}</div>
+        <div class="meta">→ ${esc(plan ? `${plan.motion} / ${plan.emotion} / ${plan.reply}` : "（无计划）")}</div>
+        ${entry.error ? `<div class="t-bad">${esc(entry.error)}</div>` : ""}`;
+      recent.appendChild(node);
+    });
+    if (!recent.childElementCount) recent.innerHTML = `<p class="muted">还没有事件。</p>`;
+  }
+
+  // ------------------------------------------------------------------ actions
+  async function act(fn, okMessage) {
+    try {
+      const result = await fn();
+      if (okMessage) toast(okMessage);
+      await refresh();
+      return result;
+    } catch (err) {
+      toast(err.message, true);
+      return null;
+    }
+  }
+
+  async function refresh() {
+    status = await api("/api/status");
+    render();
+  }
+
+  $("roomSelect").onchange = (event) => { roomId = event.target.value; renderRoom(); };
+  $("useRoom").onclick = () => {
+    const value = $("roomInput").value.trim() || $("roomSelect").value;
+    if (!value) { toast("请填写 room_id", true); return; }
+    roomId = value;
+    $("roomInput").value = value;
+    renderRoom();
+  };
+
+  $("btnManual").onclick = () => act(() => {
+    const room = roomId || $("roomInput").value.trim();
+    return api(`/api/rooms/${encodeURIComponent(room)}/events/manual`, {method: "POST", body: JSON.stringify({text: $("mText").value, user: $("mUser").value})});
+  }, "已发送模拟评论");
+  $("btnGift").onclick = () => act(() => {
+    const room = roomId || $("roomInput").value.trim();
+    return api(`/api/rooms/${encodeURIComponent(room)}/events/gift`, {method: "POST", body: JSON.stringify({
+      gift_name: $("gName").value, gift_id: $("gId").value, gift_count: Number($("gCount").value) || 1, user: $("gUser").value
+    })});
+  }, "已发送模拟礼物");
+  $("btnSimStart").onclick = () => act(() => api("/api/simulator/start", {method: "POST", body: JSON.stringify({
+    interval_seconds: Number($("simInterval").value) || 4, scenario: $("simScenario").value, room_id: roomId || $("roomInput").value.trim() || null
+  })}), "模拟循环已启动");
+  $("btnSimStop").onclick = () => act(() => api("/api/simulator/stop", {method: "POST", body: "{}"}), "模拟循环已停止");
+  $("btnInterrupt").onclick = () => act(() => api(`/api/rooms/${encodeURIComponent(roomId)}/interrupt`, {method: "POST", body: "{}"}), "已打断");
+  $("btnPause").onclick = () => {
+    const room = (status?.orchestrator?.rooms || []).find((item) => item.room_id === roomId);
+    return act(() => api(`/api/rooms/${encodeURIComponent(roomId)}/pause`, {method: "POST", body: JSON.stringify({paused: !(room?.paused)})}), "已更新暂停状态");
+  };
+  $("btnAuto").onclick = () => {
+    const room = (status?.orchestrator?.rooms || []).find((item) => item.room_id === roomId);
+    return act(() => api("/api/settings/auto-reply", {method: "POST", body: JSON.stringify({enabled: !(room?.auto_reply), room_id: roomId || null})}), "已更新自动回复");
+  };
+  $("btnClear").onclick = () => act(() => api(`/api/rooms/${encodeURIComponent(roomId)}/context/clear`, {method: "POST", body: "{}"}), "上下文已清空");
+  $("btnTaskComment").onclick = () => act(() => api("/api/douyin/tasks/start", {method: "POST", body: JSON.stringify({room_id: roomId, kind: "comment"})}), "已请求启动评论任务");
+  $("btnTaskGift").onclick = () => act(() => api("/api/douyin/tasks/start", {method: "POST", body: JSON.stringify({room_id: roomId, kind: "gift"})}), "已请求启动礼物任务");
+  $("btnTaskStop").onclick = async () => {
+    await act(() => api("/api/douyin/tasks/stop", {method: "POST", body: JSON.stringify({room_id: roomId, kind: "comment"})}), "已停止评论任务");
+    await act(() => api("/api/douyin/tasks/stop", {method: "POST", body: JSON.stringify({room_id: roomId, kind: "gift"})}), "已停止礼物任务");
+  };
+
+  $("btnPersona").onclick = () => act(() => api("/api/settings/persona", {method: "POST", body: JSON.stringify({
+    name: $("pName").value, identity: $("pIdentity").value, tone: $("pTone").value,
+    catchphrase: $("pCatch").value, reply_length: $("pLength").value, emoji: $("pEmoji").checked, rules: $("pRules").value
+  })}), "角色已保存");
+
+  $("btnPrompt").onclick = async () => {
+    try {
+      const data = await api("/api/prompt");
+      const feed = $("feed");
+      const row = document.createElement("div");
+      row.textContent = `[系统提示词]\n${data.system}`;
+      row.style.whiteSpace = "pre-wrap";
+      feed.prepend(row);
+      toast("提示词已输出到实时事件区");
+    } catch (err) { toast(err.message, true); }
+  };
+
+  // -------------------------------------------------------------------- boot
+  $("token").value = token;
+  if (token) {
+    refresh().then(() => { hideGate(); connectSocket(); }).catch(() => showGate());
+  } else {
+    showGate();
+  }
+  setInterval(() => { if (token && document.visibilityState === "visible") refresh().catch(() => {}); }, 4000);
+  setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("zh-CN", {hour12:false}); }, 1000);
+})();
+</script>
+</body>
+</html>
